@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+bot.log
+*.session
+*.session-journal
+.env
+downloads/
+temp/
+venv/
+.venv/
