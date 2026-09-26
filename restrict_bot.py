@@ -900,18 +900,22 @@ async def check_link_restriction(user_id, link_text):
     except Exception as e:
         return None, f"⚠️ **Could not analyze link.** Error: {e}"
 
-    is_temp_client = app 
+    is_temp_client = False
     check_client = app 
     
     if is_private:
-        user_session = await db.get_session(user_id)
-        if not user_session:
-            return None, "🔒 **Private Link:** Please /login to verify restrictions."
-        
-        api_id = await db.get_api_id(user_id)
-        api_hash = await db.get_api_hash(user_id)
-        check_client = Client(f"check_{user_id}_{int(time.time())}", session_string=user_session, api_id=api_id, api_hash=api_hash, no_updates=True, ipv6=False, in_memory=True)
-        is_temp_client = True
+        if user_id in USER_CLIENTS and USER_CLIENTS[user_id].is_connected:
+            check_client = USER_CLIENTS[user_id]
+            is_temp_client = False
+        else:
+            user_session = await db.get_session(user_id)
+            if not user_session:
+                return None, "🔒 **Private Link:** Please /login to verify restrictions."
+            
+            api_id = await db.get_api_id(user_id)
+            api_hash = await db.get_api_hash(user_id)
+            check_client = Client(f"check_{user_id}_{int(time.time())}", session_string=user_session, api_id=api_id, api_hash=api_hash, no_updates=True, ipv6=False, in_memory=True)
+            is_temp_client = True
 
     is_restricted = False
     status_msg = ""
@@ -943,7 +947,7 @@ async def check_link_restriction(user_id, link_text):
         else:
             status_msg = f"⚠️ **Check Failed:** `{str(e)[:30]}...`"
     finally:
-        if is_temp_client:
+        if is_temp_client and check_client:
             try: await check_client.disconnect()
             except: pass
         
@@ -983,7 +987,7 @@ def _split_file_smart(file_path, chunk_size):
 
     part_num = 0
     parts = []
-    buffer_size = 2 * 1024 * 1024 
+    buffer_size = 32 * 1024 * 1024 
     
     with open(file_path, 'rb') as source:
         while True:
@@ -2148,23 +2152,52 @@ async def process_custom_destination(client: Client, message: Message):
         
         if "t.me/c/" in text:
             parts = text.split("t.me/c/")[1].split("/")
-            dest_chat_id = int("-100" + parts[0])
-            if len(parts) > 1 and parts[1].isdigit():
-                dest_thread_id = int(parts[1])
+            chat_part = parts[0].strip()
+            dest_chat_id = int(f"-100{chat_part}") if not chat_part.startswith("-100") else int(chat_part)
+            if len(parts) > 1 and parts[1].strip().isdigit():
+                dest_thread_id = int(parts[1].strip())
         elif "t.me/" in text:
             parts = text.split("t.me/")[1].split("/")
-            dest_chat_id = parts[0] 
-            if len(parts) > 1 and parts[1].isdigit():
-                dest_thread_id = int(parts[1])
+            dest_chat_id = parts[0].strip()
+            if len(parts) > 1 and parts[1].strip().isdigit():
+                dest_thread_id = int(parts[1].strip())
         elif "/" in text:
             parts = text.split("/")
-            dest_chat_id = int(parts[0])
-            dest_thread_id = int(parts[1])
+            chat_part = parts[0].strip()
+            clean_part = chat_part.lstrip('-')
+            if clean_part.isdigit():
+                raw_num = int(chat_part)
+                if raw_num > 0 and raw_num > 10000000:
+                    dest_chat_id = int(f"-100{raw_num}")
+                elif not str(raw_num).startswith("-100"):
+                    dest_chat_id = int(f"-100{abs(raw_num)}")
+                else:
+                    dest_chat_id = raw_num
+            else:
+                dest_chat_id = chat_part
+            if len(parts) > 1 and parts[1].strip().isdigit():
+                dest_thread_id = int(parts[1].strip())
         else:
-            dest_chat_id = int(text) if text.lstrip('-').isdigit() else text
+            clean_num = text.lstrip('-')
+            if clean_num.isdigit():
+                raw_num = int(text)
+                if raw_num > 0 and raw_num > 10000000:
+                    dest_chat_id = int(f"-100{raw_num}")
+                elif not str(raw_num).startswith("-100"):
+                    dest_chat_id = int(f"-100{abs(raw_num)}")
+                else:
+                    dest_chat_id = raw_num
+            else:
+                dest_chat_id = text
             
         try:
-            chat = await client.get_chat(dest_chat_id)
+            try:
+                chat = await client.get_chat(dest_chat_id)
+            except Exception as e_bot:
+                if user_id in USER_CLIENTS and USER_CLIENTS[user_id].is_connected:
+                    chat = await USER_CLIENTS[user_id].get_chat(dest_chat_id)
+                else:
+                    raise e_bot
             title = chat.title or "Target Chat"
             dest_chat_id = chat.id 
             
@@ -2346,29 +2379,63 @@ async def finalize_watcher_setup(client, message, data, delay, user_id=None):
         f"🎛 Filter: `{', '.join(data.get('allowed_types', []))}`"
     )
 
-async def send_log(text):
+def parse_log_channel(log_channel_str):
+    if not log_channel_str:
+        return None, None
+    log_channel_str = str(log_channel_str).strip()
+    topic_id = None
+    
+    if "t.me/c/" in log_channel_str:
+        parts = log_channel_str.split("t.me/c/")[1].split("/")
+        chat_part = parts[0].strip()
+        if len(parts) > 1 and parts[1].strip().isdigit():
+            topic_id = int(parts[1].strip())
+        chat_id = int(f"-100{chat_part}") if not chat_part.startswith("-100") else int(chat_part)
+        return chat_id, topic_id
+    elif "t.me/" in log_channel_str:
+        parts = log_channel_str.split("t.me/")[1].split("/")
+        chat_part = parts[0].strip()
+        if len(parts) > 1 and parts[1].strip().isdigit():
+            topic_id = int(parts[1].strip())
+        return chat_part, topic_id
+
+    if "/" in log_channel_str:
+        parts = log_channel_str.split("/")
+        chat_part = parts[0].strip()
+        if len(parts) > 1 and parts[1].strip().isdigit():
+            topic_id = int(parts[1].strip())
+    else:
+        chat_part = log_channel_str.strip()
+
+    clean_num = chat_part.lstrip("-")
+    if clean_num.isdigit():
+        num = int(chat_part)
+        if num > 0:
+            chat_id = int(f"-100{num}") if num > 10000000 else num
+        elif not str(num).startswith("-100"):
+            chat_id = int(f"-100{abs(num)}")
+        else:
+            chat_id = num
+        return chat_id, topic_id
+    else:
+        return chat_part, topic_id
+
+async def send_log(text: str):
+    print(f"[BOT LOG] {text}")
     if not LOG_CHANNEL:
         return
     try:
-        chat_id = LOG_CHANNEL
-        topic_id = None
-        
-        if "/" in LOG_CHANNEL:
-            parts = LOG_CHANNEL.split("/")
-            chat_id = int(parts[0])
-            topic_id = int(parts[1])
-        else:
-            chat_id = int(LOG_CHANNEL)
-
+        chat_id, topic_id = parse_log_channel(LOG_CHANNEL)
+        if not chat_id:
+            return
         await app.send_message(chat_id, text, reply_to_message_id=topic_id)
     except Exception as e:
-        print(f"❌ Failed to send log: {e}")
+        print(f"❌ Failed to send log to Telegram: {e} | LOG_CHANNEL: '{LOG_CHANNEL}'. Please ensure Bot is an ADMIN in LOG_CHANNEL and ID has -100 prefix.")
 
-async def check_disk_space():
+async def check_disk_space(required_bytes=500 * 1024 * 1024):
     try:
         total, used, free = shutil.disk_usage(".")
-        free_mb = free / (1024 * 1024)
-        if free_mb < 500: 
+        if free < required_bytes: 
             return False
         return True
     except:
@@ -2755,6 +2822,8 @@ async def process_links_logic(client: Client, message: Message, text: str, targe
                             pass
                     
         except Exception as e:
+            import traceback
+            print(f"❌ Task Crashed traceback:\n{traceback.format_exc()}")
             await send_log(f"❌ **Task Crashed**\nUser: `{user_id}`\nError: `{e}`")
 
         finally:
@@ -2941,8 +3010,12 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
     auto_dl = await db.get_dl_status()
 
     # 🚀 FAST FORWARD EXACT CLONE WITH CAPTION REPLACEMENT
-    # If auto_dl is ON and file lacks a dotted extension, bypass fast-copy so we download & rename the actual Telegram document for Stremio!
-    allow_fast_copy = (not is_restricted and not getattr(msg, "has_protected_content", False) and not getattr(msg.chat, "has_protected_content", False))
+    # If the message or chat has explicit Telegram content protection, fast-copy is blocked by Telegram.
+    # Otherwise, ALWAYS attempt server-side fast-copy via client/acc FIRST!
+    # Even if restricted mode was selected, attempting copy_message takes 0.1s: if Telegram permits it,
+    # it finishes in 1 second instead of taking 15 minutes to download/split/upload 4GB!
+    is_content_protected = getattr(msg, "has_protected_content", False) or getattr(msg.chat, "has_protected_content", False)
+    allow_fast_copy = not is_content_protected
     if allow_fast_copy and (not auto_dl or has_dotted_ext or msg_type not in ["Document", "Video", "Audio"]):
         forward_success = False
         for dest in targets:
@@ -3204,7 +3277,7 @@ async def process_watcher_message(client, message):
         
         fallback_to_download = True 
 
-        if not is_restricted and not is_content_protected:
+        if not is_content_protected:
             fallback_to_download = False
             safe_source_id = message.chat.username if message.chat.username else chat_id
             
@@ -3315,11 +3388,7 @@ async def process_watcher_message(client, message):
                                 success = True
                             except Exception as e3:
 
-                                if LOG_CHANNEL:
-                                    try:
-                                        log_chat = int(LOG_CHANNEL.split("/")[0]) if "/" in LOG_CHANNEL else int(LOG_CHANNEL)
-                                        await app.send_message(log_chat, f"❌ **Fast-Copy Failed!**\nSource: `{chat_id}`\nDest: `{dest_id}`\nError: `{e3}`")
-                                    except: pass
+                                await send_log(f"❌ **Fast-Copy Failed!**\nSource: `{chat_id}`\nDest: `{dest_id}`\nError: `{e3}`")
                     
                     if not success:
                         fallback_to_download = True
@@ -3345,15 +3414,10 @@ async def process_watcher_message(client, message):
                 return
 
             notify_text = f"⬇️ **Watcher Alert (Download Mode)**\n📂 **Source:** `{source_name}`\n🎯 **Dest:** `{dest_name}`\n🆔 **Msg ID:** `{message.id}`\n*(Fast-copy failed, starting manual download...)*"
-            dummy_status = await app.send_message(owner_id, notify_text)
+            try: await app.send_message(owner_id, notify_text)
+            except: pass
             
-            if LOG_CHANNEL:
-                try:
-                    log_chat_id = int(LOG_CHANNEL.split("/")[0]) if "/" in LOG_CHANNEL else int(LOG_CHANNEL)
-                    log_topic_id = int(LOG_CHANNEL.split("/")[1]) if "/" in LOG_CHANNEL else None
-                    await app.send_message(log_chat_id, notify_text, reply_to_message_id=log_topic_id)
-                except Exception:
-                    pass
+            await send_log(notify_text)
 
             task_uuid = uuid.uuid4().hex
             if owner_id not in ACTIVE_PROCESSES: 
