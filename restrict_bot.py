@@ -3,6 +3,8 @@ import os
 import psutil
 import time
 import asyncio
+import math
+import html
 # === Python 3.12+ Event Loop Compatibility ===
 try:
     asyncio.get_event_loop()
@@ -1515,53 +1517,159 @@ async def send_log_handler(client: Client, message: Message):
     else:
         await message.reply("⚠️ Log file not found yet.")
 
-@app.on_message(filters.command(["botstats"]) & filters.user(ADMINS))
-async def bot_stats_handler(client: Client, message: Message):
-    wait = await message.reply("📊 **Generating detailed stats...**")
-    total_users = await db.total_users_count()
+async def build_bot_stats_ui(page: int = 1, page_size: int = 10):
     all_users_cursor = await db.get_all_users()
+    users_list = []
+    async for u in all_users_cursor:
+        users_list.append(u)
+        
+    total_users = len(users_list)
+    total_pages = max(1, math.ceil(total_users / page_size)) if total_users > 0 else 1
     
-    logged_in_list = []
-    async for user in all_users_cursor:
-        if user.get("session"):
-            user_id = user['id']
-            name = user.get("name") or f"User:{user_id}"
-            user_tasks = ACTIVE_PROCESSES.get(user_id, {})
-            
-            if user_tasks:
-                task_details = []
-                for t_id, info in user_tasks.items():
-                    src = info.get("source_title", "Source")
-                    dst = info.get("dest_title", "Dest")
-                    tot = info.get("total", 0)
-                    curr = info.get("current", 0)
-                    start_t = info.get("started", time.time())
-                    
-                    percent = (curr / tot * 100) if tot > 0 else 0
-                    
-                    elapsed = time.time() - start_t
-                    eta_str = "Calculating..."
-                    if curr > 0 and elapsed > 0:
+    if page < 1:
+        page = 1
+    if page > total_pages:
+        page = total_pages
+
+    # Categorize and sort users
+    # Priority: 0 = active tasks (running), 1 = logged in (idle), 2 = no session
+    def user_sort_key(u):
+        u_id = u.get("id", 0)
+        has_tasks = bool(ACTIVE_PROCESSES.get(u_id, {}))
+        has_session = bool(u.get("session"))
+        if has_tasks:
+            return (0, -(u_id or 0))
+        elif has_session:
+            return (1, -(u_id or 0))
+        else:
+            return (2, -(u_id or 0))
+
+    sorted_users = sorted(users_list, key=user_sort_key)
+
+    logged_in_count = sum(1 for u in sorted_users if u.get("session"))
+    active_users_count = sum(1 for u in sorted_users if ACTIVE_PROCESSES.get(u.get("id"), {}))
+    idle_users_count = logged_in_count - active_users_count
+    no_session_count = total_users - logged_in_count
+    total_active_tasks = sum(len(ACTIVE_PROCESSES.get(u.get("id"), {})) for u in sorted_users)
+
+    # Slice for page
+    start_idx = (page - 1) * page_size
+    end_idx = min(start_idx + page_size, total_users)
+    page_users = sorted_users[start_idx:end_idx]
+
+    user_blocks = []
+    num_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+    for i, u in enumerate(page_users, start=start_idx + 1):
+        u_id = u.get("id", 0)
+        raw_name = u.get("name") or f"User:{u_id}"
+        safe_name = html.escape(str(raw_name))
+        u_tasks = ACTIVE_PROCESSES.get(u_id, {})
+        has_session = bool(u.get("session"))
+
+        pos_in_page = i - start_idx
+        display_num = num_emojis[pos_in_page - 1] if 1 <= pos_in_page <= 10 else f"#{i}"
+
+        if u_tasks:
+            task_lines = []
+            for t_id, info in u_tasks.items():
+                src = html.escape(str(info.get("source_title", "Source")))
+                dst = html.escape(str(info.get("dest_title_name") or info.get("dest_title") or "Destination"))
+                curr = info.get("current", 0)
+                tot = info.get("total", 0)
+                pct = (curr / tot * 100) if tot > 0 else 0
+                start_t = info.get("started", time.time())
+                elapsed = time.time() - start_t
+                eta_str = "Calculating..."
+                if curr > 0 and elapsed > 0:
+                    try:
                         eta_str = get_readable_time(int(((tot - curr) / (curr / elapsed))))
+                    except Exception:
+                        eta_str = "N/A"
+                task_lines.append(f"      └ 🏃 <code>{src}</code> ➔ <code>{dst}</code> [{curr}/{tot} ({pct:.1f}%)] (ETA: {eta_str})")
+            
+            tasks_str = chr(10).join(task_lines)
+            user_blocks.append(
+                f"{display_num} 🟢 <b>{safe_name}</b> [<code>{u_id}</code>]\n"
+                f"   └ ⚡ <b>Status:</b> ACTIVE ({len(u_tasks)} Task{'s' if len(u_tasks)>1 else ''})\n"
+                f"{tasks_str}"
+            )
+        elif has_session:
+            user_blocks.append(
+                f"{display_num} 🟡 <b>{safe_name}</b> [<code>{u_id}</code>]\n"
+                f"   └ 🔑 <b>Status:</b> LOGGED IN (IDLE 😴)"
+            )
+        else:
+            user_blocks.append(
+                f"{display_num} ⚪ <b>{safe_name}</b> [<code>{u_id}</code>]\n"
+                f"   └ 🔒 <b>Status:</b> NO ACTIVE SESSION"
+            )
 
-                    task_details.append(
-                        f"      └ 🏃 {src} → {info.get('dest_title_name', 'Destination')}"
-                    )
-                    
-                tasks_str = "\n" + "\n".join(task_details)
-                logged_in_list.append(f"• **{name}** [`{user_id}`]{tasks_str}")
-            else:
-                logged_in_list.append(f"• **{name}** [`{user_id}`] (IDLE 😴)")
+    users_text = chr(10).join(user_blocks) if user_blocks else "<i>No registered users found in directory.</i>"
 
-    logged_in_text = "\n\n".join(logged_in_list) if logged_in_list else "No users logged in."
     stats_msg = (
-        "📊 **DETAILED BOT STATISTICS**\n"
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
-        f"👥 **Total Users:** `{total_users}`\n"
-        f"🔑 **Logged-in Users:** `{len(logged_in_list)}`\n\n"
-        f"📝 **User & Task Breakdown:**\n\n{logged_in_text}"
+        "👑 <b>SYSTEM BOT STATISTICS</b> 👑\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+        "🏛️ <b>EXECUTIVE OVERVIEW:</b>\n"
+        f"• 👥 <b>Total Registered:</b> <code>{total_users}</code>\n"
+        f"• 🔑 <b>Logged-in Sessions:</b> <code>{logged_in_count}</code>\n"
+        f"• 🟢 <b>Active Runners:</b> <code>{active_users_count}</code>\n"
+        f"• 🟡 <b>Idle Standby:</b> <code>{idle_users_count}</code>\n"
+        f"• ⚪ <b>Unauthenticated:</b> <code>{no_session_count}</code>\n"
+        f"• ⚡ <b>Running Workloads:</b> <code>{total_active_tasks}</code>\n\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"📜 <b>USER DIRECTORY (Page {page}/{total_pages}):</b>\n\n"
+        f"{users_text}\n\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"💎 <i>Showing {start_idx + 1 if total_users else 0}–{end_idx} of {total_users} users • 10 Users/Page</i>"
     )
-    await wait.edit(stats_msg)
+
+    buttons = []
+    if total_pages > 1:
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"botstats_p:{page-1}"))
+        nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data=f"botstats_p:{page}"))
+        if page < total_pages:
+            nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"botstats_p:{page+1}"))
+        buttons.append(nav_row)
+
+    buttons.append([
+        InlineKeyboardButton("🔄 Refresh Stats", callback_data=f"botstats_p:{page}"),
+        InlineKeyboardButton("❌ Close", callback_data="close_menu")
+    ])
+
+    markup = InlineKeyboardMarkup(buttons)
+    return stats_msg, markup
+
+@app.on_message(filters.command(["botstats"]))
+async def bot_stats_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> This command is restricted to administrators.", quote=True)
+    
+    wait = await message.reply("📊 <b>Retrieving system statistics...</b>", quote=True)
+    text, markup = await build_bot_stats_ui(page=1)
+    await wait.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+
+@app.on_callback_query(filters.regex(r"^botstats_p:(\d+)"))
+async def bot_stats_page_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id if query.from_user else 0
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied: You are not authorized to view bot stats.", show_alert=True)
+    
+    try:
+        page = int(query.matches[0].group(1))
+    except (IndexError, ValueError):
+        page = 1
+        
+    text, markup = await build_bot_stats_ui(page=page)
+    try:
+        await query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+        await query.answer(f"Page {page} loaded ⚡")
+    except Exception:
+        await query.answer("Stats are up to date! 🔄")
+
         
 # ==============================================================================
 # --- LOGIN / LOGOUT ---
