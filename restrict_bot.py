@@ -407,18 +407,25 @@ async def auth_gatekeeper(client: Client, message: Message):
         message.stop_propagation()
         now = time.time()
         last_sent = UNAUTH_NOTIFY_CACHE.get(user_id, 0)
-        if now - last_sent > 60:
+        raw_msg = (message.text or message.caption or "").strip()
+        is_start = raw_msg.startswith('/start')
+        
+        # Immediate response on EVERY /start command without delay; throttle spam to 5s
+        if is_start or (now - last_sent > 5):
             UNAUTH_NOTIFY_CACHE[user_id] = now
+            denied_text = (
+                "⛔ <b>Access Denied!</b>\n\n"
+                "This is a private automation bot restricted strictly to authorized administrators.\n\n"
+                f"🆔 <b>Your User ID:</b> <code>{user_id}</code>\n"
+                "<i>Please contact the bot administrator if you require access.</i>"
+            )
             try:
-                await message.reply(
-                    "⛔ <b>Access Denied!</b>\n\n"
-                    "This is a private automation bot restricted strictly to authorized administrators.\n\n"
-                    f"🆔 <b>Your User ID:</b> <code>{user_id}</code>\n"
-                    "<i>Please contact the bot administrator if you require access.</i>",
-                    quote=True
-                )
+                await message.reply(denied_text, quote=True)
             except Exception:
-                pass
+                try:
+                    await client.send_message(chat_id=message.chat.id, text=denied_text)
+                except Exception as e:
+                    print(f"[Gatekeeper Error] Failed to send access denied: {e}")
 
 @app.on_callback_query(group=-2)
 async def callback_auth_gatekeeper(client: Client, query: CallbackQuery):
