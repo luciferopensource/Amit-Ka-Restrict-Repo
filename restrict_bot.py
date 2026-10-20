@@ -98,17 +98,21 @@ ERROR_MESSAGE = os.environ.get("ERROR_MESSAGE", "True").lower() == "true"
 WAITING_TIME = int(os.environ.get("WAITING_TIME", 3))
 
 # --- AUTHORIZATION & ADMIN CONFIGURATION ---
-owner_str = os.environ.get("OWNER_ID", "").strip()
+def _parse_env_ids(*keys):
+    found = []
+    for k in keys:
+        for lookup in (k, k.lower(), k.upper()):
+            raw = os.environ.get(lookup, "").strip()
+            if raw:
+                found.extend([int(x) for x in re.split(r'[,;\s]+', raw) if x.strip().isdigit()])
+    return list(dict.fromkeys(found))
+
+owner_str = os.environ.get("OWNER_ID", "").strip() or os.environ.get("OWNER", "").strip() or os.environ.get("owner_id", "").strip() or os.environ.get("owner", "").strip()
 OWNER_ID = int(owner_str) if owner_str.isdigit() else 0
 
-admin_str = os.environ.get("ADMINS", "").strip() or os.environ.get("ADMIN_ID", "").strip()
-ADMINS = [int(x) for x in re.split(r'[,;\s]+', admin_str) if x.strip().isdigit()]
-
-sudo_str = os.environ.get("SUDOS", "").strip()
-SUDOS = [int(x) for x in re.split(r'[,;\s]+', sudo_str) if x.strip().isdigit()]
-
-auth_str = os.environ.get("AUTH_USERS", "").strip()
-AUTH_USERS_EXTRA = [int(x) for x in re.split(r'[,;\s]+', auth_str) if x.strip().isdigit()]
+ADMINS = _parse_env_ids("ADMINS", "ADMIN", "ADMIN_ID", "ADMIN_IDS")
+SUDOS = _parse_env_ids("SUDOS", "SUDO", "SUDO_USERS", "SUDO_USER")
+AUTH_USERS_EXTRA = _parse_env_ids("AUTH_USERS", "AUTH_USER")
 
 if OWNER_ID and OWNER_ID not in ADMINS:
     ADMINS.append(OWNER_ID)
@@ -404,7 +408,6 @@ async def auth_gatekeeper(client: Client, message: Message):
     if not user_id:
         return
     if not is_authorized(user_id):
-        message.stop_propagation()
         now = time.time()
         last_sent = UNAUTH_NOTIFY_CACHE.get(user_id, 0)
         raw_msg = (message.text or message.caption or "").strip()
@@ -426,6 +429,9 @@ async def auth_gatekeeper(client: Client, message: Message):
                     await client.send_message(chat_id=message.chat.id, text=denied_text)
                 except Exception as e:
                     print(f"[Gatekeeper Error] Failed to send access denied: {e}")
+        
+        # Stop propagation only AFTER sending notice so message actually arrives
+        message.stop_propagation()
 
 @app.on_callback_query(group=-2)
 async def callback_auth_gatekeeper(client: Client, query: CallbackQuery):
@@ -433,11 +439,11 @@ async def callback_auth_gatekeeper(client: Client, query: CallbackQuery):
         return
     user_id = query.from_user.id if query.from_user else 0
     if not is_authorized(user_id):
-        query.stop_propagation()
         try:
             await query.answer("⛔ Access Denied: You are not authorized to use this bot.", show_alert=True)
         except Exception:
             pass
+        query.stop_propagation()
 
 @app.on_message(filters.private, group=-1)
 async def ask_listener(client, message):
