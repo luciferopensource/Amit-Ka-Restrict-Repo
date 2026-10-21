@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/logo.png" alt="Lucifer Morningstar Banner" width="100%" />
+<img src="./assets/logo.png" alt="Fast Forward Automation Banner" width="100%" />
 
 <br><br>
 
@@ -30,12 +30,12 @@
 ◈━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◈
 ### 🏛️ OFFICIAL CITADEL & SUPPORT
 
-> 📢 **Official Channel:** [@LuciferOpenSource](https://t.me/LuciferOpenSource)  
-> 💬 **Support Group:** [@LuciferOpenSourceDiscussionGroup](https://t.me/LuciferOpenSourceDiscussionGroup)  
+> 📢 **Official Channel:** `Private Channel`  
+> 💬 **Support Group:** `Private Support`  
 > 🍿 **Movie Request Group:** (https://t.me/)  
-> 🌟 **GitHub Repository:** [Auto-Filter-Bot-Lucifer](https://github.com/ailuciferbaba-pixel/Auto-Filter-Bot-Lucifer/)  
-> 👨‍💻 **GitHub Profile:** [ailuciferbaba-pixel](https://github.com/ailuciferbaba-pixel)  
-> 👑 **Lead Developer:** **Lucifer Morningstar**  
+> 🌟 **GitHub Repository:** [Auto-Filter-Bot-Lucifer](https://github.com/amit-ka-restrict-repo/)  
+> 👨‍💻 **GitHub Profile:** `Private Development`  
+> 👑 **Lead Developer:** **Automation Engine**  
 ◈━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◈
 
 </div>
@@ -76,7 +76,7 @@
 27. 🔒 Security Best Practices & Credential Hygiene
 28. 🔄 Maintenance, Backups & Update Procedures
 29. 📜 Licence Information
-30. 👑 The Lucifer Morningstar Citadel
+30. 👑 The Telegram Automation Engine Citadel
 ```
 
 ---
@@ -85,7 +85,7 @@
 
 ## 👑 01. EXECUTIVE PROJECT OVERVIEW
 
-**Lucifer Morningstar** represents an advanced, high-throughput Telegram synchronisation, restricted-content extraction, and media sanitisation engine engineered with Python 3.10+, Pyrogram/Pyrofork v2, and MongoDB Motor.
+**Automation Engine** represents an advanced, high-throughput Telegram synchronisation, restricted-content extraction, and media sanitisation engine engineered with Python 3.10+, Pyrogram/Pyrofork v2, and MongoDB Motor.
 
 In standard operational environments, transferring media libraries between Telegram channels presents severe operational hurdles:
 1. **Restricted Channel Protections:** Channels with disabled forwarding, restricted saving permissions, or private invite architectures block direct transmission.
@@ -188,7 +188,7 @@ The synchronisation pipeline operates across distinct, fault-tolerant phases:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                       LUCIFER MORNINGSTAR PROCESS                       │
+│                       TELEGRAM AUTOMATION PROCESS                       │
 ├───────────────────────────────────┬─────────────────────────────────────┤
 │      TELEGRAM CLIENT LAYER        │         ASYNC CORE & STORAGE        │
 │  ┌─────────────────────────────┐  │  ┌───────────────────────────────┐  │
@@ -300,7 +300,7 @@ To allow the MTProto engine to interact with Telegram's binary data clusters, yo
 
 1. Open Telegram and initiate a conversation with [@BotFather](https://t.me/BotFather).
 2. Execute the `/newbot` command.
-3. Provide a friendly display name (e.g., `Lucifer Morningstar Engine`).
+3. Provide a friendly display name (e.g., `Telegram Automation Engine Engine`).
 4. Provide a unique username ending in `bot` (e.g., `LuciferMorningstar_SyncBot`).
 5. BotFather will issue your authentication token formatted as:
    ```text
@@ -785,7 +785,7 @@ Maintains message ID pointers ensuring tasks resume seamlessly across server res
 
 ### Step 1: Clone Repository
 ```bash
-git clone https://github.com/ailuciferbaba-pixel/Auto-Filter-Bot-Lucifer.git
+git clone https://gitlab.com/luciferopensource/amit-ka-restrict-repo.git
 cd Auto-Filter-Bot-Lucifer
 ```
 
@@ -846,7 +846,7 @@ sudo apt-get install -y python3 python3-pip python3-venv git 7zip coreutils buil
 sudo mkdir -p /opt/lucifer-engine
 sudo chown -R $USER:$USER /opt/lucifer-engine
 cd /opt/lucifer-engine
-git clone https://github.com/ailuciferbaba-pixel/Auto-Filter-Bot-Lucifer.git .
+git clone https://gitlab.com/luciferopensource/amit-ka-restrict-repo.git .
 python3 -m venv venv
 source venv/bin/activate
 pip install --no-cache-dir -r requirements.txt
@@ -879,7 +879,7 @@ sudo nano /etc/systemd/system/lucifer.service
 Insert the service definition:
 ```ini
 [Unit]
-Description=Lucifer Morningstar Telegram Automation Engine
+Description=Telegram Automation Engine Telegram Automation Engine
 After=network.target
 
 [Service]
@@ -959,7 +959,7 @@ docker start lucifer-engine
 
 1. Sign in to [Render](https://render.com/).
 2. Click **New ➔ Web Service** (or Background Worker).
-3. Connect your GitHub repository: `ailuciferbaba-pixel/Auto-Filter-Bot-Lucifer`.
+3. Connect your GitHub repository: `amit-ka-restrict-repo`.
 4. Configure Build and Runtime settings:
    * **Environment:** `Docker` (Render automatically uses your repository `Dockerfile`).
    * **Region:** Choose the region closest to your MongoDB cluster.
@@ -1174,7 +1174,7 @@ This project is distributed under the terms of the **MIT Licence**.
 ```text
 MIT License
 
-Copyright (c) 2026 Lucifer Morningstar
+Copyright (c) 2026 Telegram Automation Engine
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -1202,28 +1202,8 @@ SOFTWARE.
 <div align="center">
 
 ◈━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◈
-## 👑 30. THE LUCIFER MORNINGSTAR CITADEL
-◈━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◈
+## ⚡ 30. ARCHITECTURE & SPECIFICATIONS
 
-<br>
+High-performance automated Telegram forwarding engine with database-backed persistence.
 
-### ⚜️ **Lucifer Morningstar** ⚜️
-*Lead Architect, Core Systems Engineer & Project Maintainer*
-
-<br>
-
-> *“True engineering perfection is not attained when there is nothing left to add, but when every superfluous element has been stripped away, leaving only unyielding resilience and sovereign precision.”*
-
-<br>
-
-[![Official Channel](https://img.shields.io/badge/Telegram-Official_Channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/LuciferOpenSource)
-[![Support Group](https://img.shields.io/badge/Telegram-Support_Group-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/LuciferOpenSourceDiscussionGroup)
-[![Request Group](https://img.shields.io/badge/Telegram-Movie_Request_Group-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/)
-[![GitHub](https://img.shields.io/badge/GitHub-ailuciferbaba--pixel-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ailuciferbaba-pixel)
-
-<br>
-
-**Crafted with unwavering discipline, sovereign precision, and cryptographic fidelity.**  
-*© 2026 Lucifer Morningstar. All Rights Reserved.*
-
-</div>
+*© 2026 Telegram Automation Engine. All Rights Reserved.*

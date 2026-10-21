@@ -176,7 +176,9 @@ HELP_TXT = """<b>📚 BOT'S USAGE GUIDE</b>
 • <code>/watchers</code> (or <code>/list</code>) - View active watchers & filters.
 • <code>/removetarget</code> - Remove a specific destination.
 • <code>/removesource</code> (or <code>/unwatch</code>) - Stop watching a source.
-• <code>/viewsavedchannels</code> (or <code>/savedchannels</code>) - View and manage saved destination channels.
+• <code>/addchannel</code> (or <code>/savechannel</code>) - Add & save destination channel to memory.
+• <code>/viewsavedchannels</code> (or <code>/savedchannels</code>) - View, select & delete saved channels (10 per page).
+• <code>/setcommands</code> - Sync and refresh Telegram menu commands.
 • <code>/tasks</code> - Delete old progress and reload live progress pop-up.
 • <code>/toggledl</code> - Turn ON/OFF Background Downloading.
 • <code>/cancel</code> - Cancel ongoing tasks.
@@ -838,6 +840,7 @@ USER_SEMAPHORE_LIMIT = 3
 USER_SEMAPHORES = defaultdict(lambda: asyncio.Semaphore(USER_SEMAPHORE_LIMIT))
 
 PENDING_TASKS = {}
+PENDING_ADD_CHANNEL = {}  # user_id -> prompt_message_id
 PROGRESS = {}
 SESSION_STRING_SIZE = 351
 
@@ -1637,6 +1640,7 @@ async def send_start(client: Client, message: Message):
             print(f"Failed to save user {user_id}: {e}")
 
     asyncio.create_task(_save_user_bg())
+    asyncio.create_task(register_bot_commands(client))
 
     user_mention = getattr(message.from_user, "mention", None) or html.escape(message.from_user.first_name or "User")
     welcome_text = (
@@ -2522,11 +2526,17 @@ async def unwatch_callback(client, query):
 # --- CORE: receive links / start tasks / processing / cancel checks ---
 # ==============================================================================
 
-@app.on_message((filters.text | filters.caption) & filters.private & ~filters.command(["dl", "start", "help", "cancel", "botstats", "login", "logout", "broadcast", "status", "watch", "unwatch", "watchers", "removetarget", "removesource", "log", "tasks", "progress", "toggledl"]))
+@app.on_message((filters.text | filters.caption) & filters.private & ~filters.command(["dl", "start", "help", "cancel", "botstats", "login", "logout", "broadcast", "status", "watch", "unwatch", "watchers", "removetarget", "removesource", "log", "tasks", "progress", "toggledl", "addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel", "viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels", "setcommands", "sync_commands"]))
 async def save(client: Client, message: Message):
     user_id = message.from_user.id
     if not is_authorized(user_id):
         return await message.reply('⛔ <b>Access Denied:</b> You are not authorized to use this bot.', quote=True)
+    if message.text and message.text.startswith("/"):
+        return
+    if user_id in PENDING_ADD_CHANNEL:
+        prompt_msg_id = PENDING_ADD_CHANNEL.pop(user_id, None)
+        await process_add_channel_submission(client, message, message.text, prompt_msg_id=prompt_msg_id)
+        return
     if user_id in PENDING_TASKS:
         if PENDING_TASKS[user_id].get("status") == "waiting_id":
             await process_custom_destination(client, message)
@@ -2645,6 +2655,61 @@ def get_channel_emoji(index: int, title: str) -> str:
     if any(k in title_lower for k in ["series", "show", "anime"]): return "🍿"
     return CHANNEL_EMOJIS[(index - 1) % len(CHANNEL_EMOJIS)]
 
+def parse_channel_input(raw_text: str):
+    text = (raw_text or "").strip()
+    if not text:
+        return None, None, None
+    parts = text.split()
+    target_spec = parts[0].strip()
+    custom_title = " ".join(parts[1:]).strip() if len(parts) > 1 else None
+    
+    chat_id = None
+    thread_id = None
+    
+    if "t.me/c/" in target_spec:
+        clean = target_spec.split("t.me/c/")[1].strip("/")
+        segs = clean.split("/")
+        cid_str = segs[0].strip()
+        chat_id = int(f"-100{cid_str}") if not cid_str.startswith("-100") else int(cid_str)
+        if len(segs) > 1 and segs[1].strip().isdigit():
+            thread_id = int(segs[1].strip())
+    elif "t.me/" in target_spec:
+        clean = target_spec.split("t.me/")[1].strip("/")
+        segs = clean.split("/")
+        chat_id = segs[0].strip()
+        if not chat_id.startswith("+"):
+            chat_id = chat_id.lstrip("@")
+    elif "/" in target_spec:
+        segs = target_spec.split("/")
+        cid_str = segs[0].strip()
+        clean_num = cid_str.lstrip("-")
+        if clean_num.isdigit():
+            raw_num = int(cid_str)
+            if raw_num > 0 and raw_num > 10000000:
+                chat_id = int(f"-100{raw_num}")
+            elif not str(raw_num).startswith("-100"):
+                chat_id = int(f"-100{abs(raw_num)}")
+            else:
+                chat_id = raw_num
+        else:
+            chat_id = cid_str.lstrip("@")
+        if len(segs) > 1 and segs[1].strip().isdigit():
+            thread_id = int(segs[1].strip())
+    else:
+        clean_num = target_spec.lstrip("-")
+        if clean_num.isdigit():
+            raw_num = int(target_spec)
+            if raw_num > 0 and raw_num > 10000000:
+                chat_id = int(f"-100{raw_num}")
+            elif not str(raw_num).startswith("-100"):
+                chat_id = int(f"-100{abs(raw_num)}")
+            else:
+                chat_id = raw_num
+        else:
+            chat_id = target_spec.lstrip("@")
+            
+    return chat_id, thread_id, custom_title
+
 async def auto_resolve_channel_title(client: Client, user_id: int, channel_id, current_title: str = None) -> str:
     clean_title = (current_title or "").strip()
     if clean_title and not clean_title.startswith("Chat ") and clean_title not in ["Target Chat", "Destination", "Unknown Destination"]:
@@ -2743,8 +2808,11 @@ def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int 
         action_row.append(InlineKeyboardButton("🔙 Back to Channel List", callback_data=f"ch_page:{page}:view"))
         action_row.append(InlineKeyboardButton("❌ Close", callback_data="ch_close"))
     elif mode == "view":
-        action_row.append(InlineKeyboardButton("🗑️ Bulk Delete Mode", callback_data=f"ch_page:{page}:delete"))
-        action_row.append(InlineKeyboardButton("❌ Close", callback_data="ch_close"))
+        action_row.append(InlineKeyboardButton("➕ Add Channel", callback_data="prompt_add_channel"))
+        if total_channels > 0:
+            action_row.append(InlineKeyboardButton("🗑️ Bulk Delete Mode", callback_data=f"ch_page:{page}:delete"))
+        buttons.append(action_row)
+        buttons.append([InlineKeyboardButton("❌ Close", callback_data="ch_close")])
     else:
         action_row.append(InlineKeyboardButton("✏️ Enter Other ID/Link", callback_data="ch_manual"))
         if total_channels > 0:
@@ -3078,15 +3146,19 @@ async def channel_memory_select_callback(client: Client, query: CallbackQuery):
     await db.save_channel(user_id, channel_id, title, channel_type="dest", thread_id=thread_id)
     await ask_for_speed(query.message)
 
-@app.on_callback_query(filters.regex(r"^ch_page:(\d+):(\w+)"))
+@app.on_callback_query(filters.regex(r"^(?:ch_page:(\d+):?(\w+)?|ch_pg:(\d+))"))
 async def channel_memory_page_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     if not is_authorized(user_id):
         return await query.answer("⛔ Access Denied.", show_alert=True)
     
     match = query.matches[0]
-    page = int(match.group(1))
-    mode = match.group(2)
+    if match.group(1):
+        page = int(match.group(1))
+        mode = match.group(2) or "view"
+    else:
+        page = int(match.group(3))
+        mode = "view" 
     
     saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
     text, markup = build_channel_memory_ui(saved_channels, page=page, mode=mode)
@@ -3276,10 +3348,17 @@ async def saved_channels_command(client: Client, message: Message):
         
     saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
     if not saved_channels:
+        empty_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add Destination Channel", callback_data="prompt_add_channel")],
+            [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+        ])
         return await message.reply(
             "📁 <b>YOUR CHANNEL MEMORY IS EMPTY</b>\n\n"
-            "Whenever you send or forward content to a channel or enter a channel ID/link, this bot will automatically remember it!\n\n"
-            "<i>Your saved channels will appear as 10 quick-select buttons per page during forwarding setups.</i>",
+            "You haven't saved any destination channels yet.\n\n"
+            "Whenever you send content to a channel or enter a channel ID/link, this bot automatically remembers it.\n"
+            "You can also manually save any channel using <code>/addchannel</code> or the button below:\n\n"
+            "<i>Your saved channels will appear as 10 quick-select buttons per page during forwarding setups!</i>",
+            reply_markup=empty_markup,
             quote=True
         )
 
@@ -3292,6 +3371,213 @@ async def saved_channels_command(client: Client, message: Message):
 
     text, markup = build_channel_memory_ui(saved_channels, page=1, mode="view")
     await message.reply(text, reply_markup=markup, quote=True)
+
+async def process_add_channel_submission(client: Client, message: Message, raw_input: str, prompt_msg_id: int = None):
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id or not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+
+    dest_chat_id, dest_thread_id, custom_title = parse_channel_input(raw_input)
+    if not dest_chat_id:
+        return await message.reply(
+            "❌ <b>Invalid Channel Input</b>\n\n"
+            "Please provide a valid channel ID (e.g. <code>-100xxxxxxxxxx</code>), @username, or link.\n\n"
+            "<b>Examples:</b>\n"
+            "• <code>/addchannel -1001234567890</code>\n"
+            "• <code>/addchannel -1001234567890 My Backup Channel</code>\n"
+            "• <code>https://t.me/c/1234567890</code>\n"
+            "• <code>@channelusername</code>",
+            quote=True
+        )
+
+    status_msg = await message.reply("🔄 <b>Auto-detecting channel details & verifying permissions...</b>", quote=True)
+
+    # 1. Auto-recognize channel title and details
+    real_chat = None
+    try:
+        real_chat = await client.get_chat(dest_chat_id)
+    except Exception:
+        if user_id in USER_CLIENTS and getattr(USER_CLIENTS[user_id], "is_connected", False):
+            try:
+                real_chat = await USER_CLIENTS[user_id].get_chat(dest_chat_id)
+            except Exception:
+                pass
+
+    if real_chat:
+        dest_chat_id = real_chat.id
+        auto_title = real_chat.title or getattr(real_chat, "first_name", None) or f"Chat {real_chat.id}"
+        if not getattr(real_chat, "is_forum", False):
+            dest_thread_id = None
+    else:
+        auto_title = None
+
+    final_title = custom_title or auto_title or f"Chat {dest_chat_id}"
+
+    # 2. Check destination write access
+    has_access, error_msg = await test_destination_access(client, dest_chat_id, dest_thread_id)
+
+    # 3. Save into MongoDB user memory
+    try:
+        await db.save_channel(
+            user_id=user_id,
+            channel_id=dest_chat_id,
+            channel_title=final_title,
+            channel_type="dest",
+            thread_id=dest_thread_id
+        )
+    except Exception as e_db:
+        return await status_msg.edit(f"❌ <b>Database Error:</b> Failed to save channel: `{e_db}`")
+
+    # 4. Count total saved channels for user
+    total_saved = 0
+    try:
+        saved_list = await db.get_saved_channels(user_id, channel_type="dest")
+        total_saved = len(saved_list)
+    except Exception:
+        pass
+
+    admin_note = (
+        "✅ <b>Ready:</b> Bot has verified administrator posting rights."
+        if has_access
+        else f"⚠️ <b>Notice:</b> Bot is not an admin yet. Please add this bot to the channel with 'Post Messages' rights before forwarding content."
+    )
+
+    success_text = (
+        "🎉 <b>CHANNEL SAVED TO MEMORY!</b>\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"🏷️ <b>Channel Title:</b> <b>{html.escape(str(final_title))}</b>\n"
+        f"🆔 <b>Channel ID:</b> <code>{dest_chat_id}</code>\n"
+        + (f"📌 <b>Topic ID:</b> <code>{dest_thread_id}</code>\n" if dest_thread_id else "")
+        + f"🤖 <b>Bot Status:</b> {admin_note}\n"
+        f"📊 <b>Total Channels in Memory:</b> <code>{total_saved}</code>\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        "<i>This channel will now appear in your saved destination list (10 buttons per page) during forwarding setups!</i>"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📑 View Saved Channels", callback_data="ch_pg:1"),
+            InlineKeyboardButton("➕ Add Another", callback_data="prompt_add_channel")
+        ],
+        [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+    ])
+
+    await status_msg.edit(success_text, reply_markup=markup)
+
+    if prompt_msg_id:
+        try:
+            await client.delete_messages(chat_id=message.chat.id, message_ids=prompt_msg_id)
+        except Exception:
+            pass
+
+@app.on_message(filters.command(["addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel"]) & filters.private)
+async def add_channel_command(client: Client, message: Message):
+    if not message.chat or message.chat.type != enums.ChatType.PRIVATE:
+        return
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id or getattr(message.from_user, "is_bot", False):
+        return
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+
+    text = message.text.strip() if message.text else ""
+    parts = text.split(maxsplit=1)
+    
+    if len(parts) > 1 and parts[1].strip():
+        await process_add_channel_submission(client, message, parts[1].strip())
+        return
+
+    prompt_text = (
+        "➕ <b>ADD SAVED DESTINATION CHANNEL</b>\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        "Please send the <b>Channel ID</b>, <b>@username</b>, or <b>invite link</b> of the channel you want to save.\n\n"
+        "<b>Supported Formats:</b>\n"
+        "• <code>-1001234567890</code>\n"
+        "• <code>-1001234567890 Optional Custom Title</code>\n"
+        "• <code>https://t.me/c/1234567890</code>\n"
+        "• <code>https://t.me/c/1234567890/45</code> <i>(with Forum Topic ID)</i>\n"
+        "• <code>@channelusername</code>\n\n"
+        "💡 <i>The bot will automatically recognize the channel's real name from Telegram!</i>\n\n"
+        "<i>Or send</i> <code>/addchannel -100xxxxxxxxxx</code> <i>anytime directly.</i>"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📑 View Saved Channels", callback_data="ch_pg:1")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
+    ])
+
+    prompt_msg = await message.reply(prompt_text, reply_markup=markup, quote=True)
+    PENDING_ADD_CHANNEL[user_id] = prompt_msg.id
+
+@app.on_callback_query(filters.regex(r"^prompt_add_channel$"))
+async def prompt_add_channel_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    
+    prompt_text = (
+        "➕ <b>ADD SAVED DESTINATION CHANNEL</b>\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        "Please send the <b>Channel ID</b>, <b>@username</b>, or <b>invite link</b> of the channel you want to save.\n\n"
+        "<b>Supported Formats:</b>\n"
+        "• <code>-1001234567890</code>\n"
+        "• <code>-1001234567890 Optional Custom Title</code>\n"
+        "• <code>https://t.me/c/1234567890</code>\n"
+        "• <code>https://t.me/c/1234567890/45</code> <i>(with Forum Topic ID)</i>\n"
+        "• <code>@channelusername</code>\n\n"
+        "💡 <i>The bot will automatically recognize the channel's real name from Telegram!</i>"
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Back to Channels List", callback_data="ch_pg:1")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
+    ])
+    try:
+        await query.message.edit_text(prompt_text, reply_markup=markup)
+        PENDING_ADD_CHANNEL[user_id] = query.message.id
+    except Exception:
+        pass
+    await query.answer()
+
+@app.on_callback_query(filters.regex(r"^cancel_add_channel$"))
+async def cancel_add_channel_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    PENDING_ADD_CHANNEL.pop(user_id, None)
+    try:
+        await query.message.edit_text(
+            "❌ <b>Cancelled:</b> Adding channel was cancelled.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📑 View Saved Channels", callback_data="ch_pg:1")],
+                [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+            ])
+        )
+    except Exception:
+        pass
+    await query.answer("Cancelled.", show_alert=False)
+
+@app.on_message(filters.command(["setcommands", "sync_commands", "updatecommands", "setbotcommands"]) & filters.private)
+async def sync_commands_command(client: Client, message: Message):
+    if not message.chat or message.chat.type != enums.ChatType.PRIVATE:
+        return
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id or getattr(message.from_user, "is_bot", False):
+        return
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+        
+    status_msg = await message.reply("🔄 <b>Synchronizing Telegram Bot Commands...</b>", quote=True)
+    success = await register_bot_commands(client)
+    if success:
+        await status_msg.edit(
+            "✅ <b>Telegram Bot Commands Synchronized Successfully!</b>\n\n"
+            "The Telegram Menu button and <code>/</code> autocomplete list have been refreshed with all the latest commands:\n"
+            "• <code>/addchannel</code> - Add & save destination channel\n"
+            "• <code>/viewsavedchannels</code> - View saved channels\n"
+            "• <code>/savedchannels</code> - Quick list saved channels\n"
+            "• and all system automation commands!\n\n"
+            "<i>(Tip: If Telegram client app does not immediately refresh its cache, re-opening the chat or typing '/' triggers an instant cache reload.)</i>"
+        )
+    else:
+        await status_msg.edit("❌ <b>Error:</b> Failed to sync bot commands with Telegram servers.")
 
 @app.on_callback_query(filters.regex("^speed_"))
 async def speed_callback(client: Client, query):
@@ -4533,6 +4819,50 @@ async def cleanup_startup():
             print(f"⚠️ Could not clean downloads folder: {e}")
     folder.mkdir(parents=True, exist_ok=True)
 
+async def register_bot_commands(bot_client: Client) -> bool:
+    try:
+        public_commands = [
+            BotCommand("start", "⚡ Check Bot Is Working Or Not"),
+            BotCommand("help", "🔎 Check How To Use Bot"),
+            BotCommand("addchannel", "➕ Save Destination Channel"),
+            BotCommand("viewsavedchannels", "📑 View & Manage Saved Channels"),
+            BotCommand("savedchannels", "📑 Quick List Saved Channels"),
+            BotCommand("login", "📍 Login Your Telegram String Session"),
+            BotCommand("logout", "🚨 Logout Your Session"),
+            BotCommand("dl", "🦥 Reply to the link to forward"),
+            BotCommand("watch", "👀 To live forward"),
+            BotCommand("unwatch", "🗑 Stop watching a source"),
+            BotCommand("watchers", "📋 List your active watchers"),
+            BotCommand("tasks", "📊 View live task progress"),
+            BotCommand("toggledl", "🔛 Turn Auto-Download ON/OFF"),
+            BotCommand("pixel", "✨ Bypass Pixeldrain Links"),
+            BotCommand("cancel", "❌ Cancel Your Any Ongoing Task")
+        ]
+
+        admin_commands = public_commands + [
+            BotCommand("broadcast", "🗞 Broadcast Message"),
+            BotCommand("botstats", "🔎 Check User Stats"),
+            BotCommand("status", "🦥 Check System Status"),
+            BotCommand("log", "📄 Fetch Bot Logs"),
+            BotCommand("setcommands", "🔄 Refresh Telegram Bot Commands")
+        ]
+
+        await bot_client.set_bot_commands(public_commands, scope=BotCommandScopeDefault())
+
+        all_admins = set(SUPER_ADMINS)
+        for admin_id in all_admins:
+            try:
+                await bot_client.set_bot_commands(
+                    admin_commands, 
+                    scope=BotCommandScopeChat(chat_id=admin_id)
+                )
+            except Exception:
+                pass
+        return True
+    except Exception as e:
+        print(f"[Register Commands Notice]: {e}")
+        return False
+
 async def main():
     global USER_CLIENTS
     
@@ -4546,44 +4876,7 @@ async def main():
     except Exception:
         pass
     
-    try:
-        public_commands = [
-            BotCommand("start", "⚡ Check Bot Is Working Or Not"),
-            BotCommand("help", "🔎 Check How To Use Bot"),
-            BotCommand("login", "📍 Login Your Telegram String Session"),
-            BotCommand("logout", "🚨 Logout Your Session"),
-            BotCommand("dl", "🦥 Reply to the link to forward"),
-            BotCommand("watch", "👀 To live forward"),
-            BotCommand("unwatch", "🗑 Stop watching a source"),
-            BotCommand("watchers", "📋 List your active watchers"),
-            BotCommand("tasks", "📊 View live task progress"),
-            BotCommand("toggledl", "🔛 Turn Auto-Download ON/OFF"),
-            BotCommand("cancel", "❌ Cancel Your Any Ongoing Task")
-        ]
-
-        admin_commands = public_commands + [
-            BotCommand("broadcast", "🗞 Broadcast Message"),
-            BotCommand("botstats", "🔎 Check User Stats"),
-            BotCommand("status", "🦥 Check System Status"),
-            BotCommand("log", "📄 Fetch Bot Logs"),
-            BotCommand("pixel", "✨ Bypass Pixeldrain Links")
-        ]
-
-        await app.set_bot_commands(public_commands, scope=BotCommandScopeDefault())
-
-        all_admins = set(SUPER_ADMINS)
-        
-        for admin_id in all_admins:
-            try:
-                await app.set_bot_commands(
-                    admin_commands, 
-                    scope=BotCommandScopeChat(chat_id=admin_id)
-                )
-            except Exception as e:
-                pass
-                
-    except Exception as e:
-        pass
+    await register_bot_commands(app)
     
     active_watcher_users = set()
     cursor = await db.get_all_watchers()
