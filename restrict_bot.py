@@ -2523,7 +2523,8 @@ def get_format_keyboard(current_formats):
     buttons = [
         [
             InlineKeyboardButton(f"{'✅' if 'Bold' in current_formats else '❌'} Bold", callback_data="format_toggle:Bold"),
-            InlineKeyboardButton(f"{'✅' if 'Italic' in current_formats else '❌'} Italic", callback_data="format_toggle:Italic")
+            InlineKeyboardButton(f"{'✅' if 'Italic' in current_formats else '❌'} Italic", callback_data="format_toggle:Italic"),
+            InlineKeyboardButton(f"{'✅' if 'Mono' in current_formats else '❌'} Mono", callback_data="format_toggle:Mono")
         ],
         [InlineKeyboardButton("✅ Default (Keep Original)", callback_data="format_none")],
         [InlineKeyboardButton("⏭ Next: Select Filters", callback_data="format_start")],
@@ -3486,10 +3487,12 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
             clean_caption = smart_caption(fallback_fn)
 
     if text_format:
-        if "Bold" in text_format:
-            clean_caption = f"<b>{clean_caption}</b>"
+        if "Mono" in text_format:
+            clean_caption = f"<code>{clean_caption}</code>"
         if "Italic" in text_format:
             clean_caption = f"<i>{clean_caption}</i>"
+        if "Bold" in text_format:
+            clean_caption = f"<b>{clean_caption}</b>"
 
     if msg_type != "Text":
         clean_caption = append_media_footer(clean_caption, media_file_size)
@@ -3813,8 +3816,9 @@ async def process_watcher_message(client, message):
                 original_caption = message.text.html if message.text else ""
                 clean_caption = smart_caption(original_caption)
                 if text_format:
-                    if "Bold" in text_format: clean_caption = f"<b>{clean_caption}</b>"
+                    if "Mono" in text_format: clean_caption = f"<code>{clean_caption}</code>"
                     if "Italic" in text_format: clean_caption = f"<i>{clean_caption}</i>"
+                    if "Bold" in text_format: clean_caption = f"<b>{clean_caption}</b>"
                 for t in targets:
                     try: 
                         await client.send_message(
@@ -3862,8 +3866,9 @@ async def process_watcher_message(client, message):
                     clean_caption = smart_caption(fallback_fn)
 
             if text_format:
-                if "Bold" in text_format: clean_caption = f"<b>{clean_caption}</b>"
+                if "Mono" in text_format: clean_caption = f"<code>{clean_caption}</code>"
                 if "Italic" in text_format: clean_caption = f"<i>{clean_caption}</i>"
+                if "Bold" in text_format: clean_caption = f"<b>{clean_caption}</b>"
 
             clean_caption = append_media_footer(clean_caption, media_file_size)
 
