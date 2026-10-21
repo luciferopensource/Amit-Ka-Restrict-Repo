@@ -8,9 +8,10 @@ import math
 import html
 # === Python 3.12+ Event Loop Compatibility ===
 try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+    loop = asyncio.get_event_loop_policy().get_event_loop()
+except Exception:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
 import re
 import shutil
@@ -202,7 +203,7 @@ class Database:
 
     async def init_indexes(self):
         try:
-            if not self.db:
+            if self.db is None or self.col is None:
                 return
             await self.col.create_index("id", unique=True)
             await self.db.watchers.create_index([("source_id", 1), ("source_thread", 1)])
@@ -214,17 +215,27 @@ class Database:
             print(f"⚠️ Index initialization notice: {e}")
 
     async def get_dl_status(self):
-        setting = await self.db.settings.find_one({'id': 'system'})
-        if setting: return setting.get('auto_download', True)
+        if self.db is None:
+            return True
+        try:
+            setting = await self.db.settings.find_one({'id': 'system'})
+            if setting: return setting.get('auto_download', True)
+        except Exception:
+            pass
         return True
 
     async def toggle_dl_status(self):
-        current = await self.get_dl_status()
-        await self.db.settings.update_one({'id': 'system'}, {'$set': {'auto_download': not current}}, upsert=True)
-        return not current
+        if self.db is None:
+            return False
+        try:
+            current = await self.get_dl_status()
+            await self.db.settings.update_one({'id': 'system'}, {'$set': {'auto_download': not current}}, upsert=True)
+            return not current
+        except Exception:
+            return False
 
     async def save_channel(self, user_id: int, channel_id, channel_title: str, channel_type: str = "dest", thread_id=None):
-        if not self.db:
+        if self.db is None:
             return
         try:
             query = {
@@ -245,7 +256,7 @@ class Database:
             print(f"Error saving channel to memory: {e}")
 
     async def get_saved_channels(self, user_id: int, channel_type: str = "dest"):
-        if not self.db:
+        if self.db is None:
             return []
         try:
             cursor = self.db.saved_channels.find({"user_id": int(user_id)}).sort("last_used", -1)
@@ -258,7 +269,7 @@ class Database:
             return []
 
     async def get_saved_channel(self, user_id: int, channel_id, thread_id=None):
-        if not self.db:
+        if self.db is None:
             return None
         try:
             query = {
@@ -272,7 +283,7 @@ class Database:
             return None
 
     async def delete_saved_channel(self, user_id: int, channel_id, thread_id=None):
-        if not self.db:
+        if self.db is None:
             return False
         try:
             query = {
@@ -296,7 +307,7 @@ class Database:
         )
 
     async def add_user(self, id, name):
-        if not self.col:
+        if self.col is None:
             return
         try:
             user = self.new_user(id, name)
@@ -306,7 +317,7 @@ class Database:
             pass
 
     async def is_user_exist(self, id):
-        if not self.col:
+        if self.col is None:
             return False
         try:
             user = await self.col.find_one({'id':int(id)})
@@ -2829,31 +2840,39 @@ async def destination_callback(client: Client, query):
     if user_id not in PENDING_TASKS:
         return await query.answer("❌ Task expired. Send link again.", show_alert=True)
     choice = query.data
-    if choice == "dest_dm":
-        PENDING_TASKS[user_id]["dest_chat_id"] = user_id
-        PENDING_TASKS[user_id]["dest_thread_id"] = None
-        await ask_for_speed(query.message)
-    elif choice == "dest_custom":
-        saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
-        if saved_channels:
-            text, markup = build_channel_memory_ui(saved_channels, page=1, mode="select")
-            await query.message.edit_text(text, reply_markup=markup)
-            await query.answer("Loaded saved channels ⚡")
-        else:
-            PENDING_TASKS[user_id]["status"] = "waiting_id"
-            buttons = [
-                [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_setup")]
-            ]
-            await query.message.edit(
-                "📝 <b>Send the Target Chat ID or Link</b>\n\n"
-                "Examples:\n"
-                "• Channel/Group: <code>-100123456789</code>\n"
-                "• Specific Topic: <code>-100123456789/5</code>\n"
-                "• Public Link: <code>https://t.me/your_channel</code>\n\n"
-                "💡 <i>I will automatically save this channel to your quick memory once tested!</i>",
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
+    try:
+        if choice == "dest_dm":
+            PENDING_TASKS[user_id]["dest_chat_id"] = user_id
+            PENDING_TASKS[user_id]["dest_thread_id"] = None
+            await ask_for_speed(query.message)
             await query.answer()
+        elif choice == "dest_custom":
+            saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
+            if saved_channels:
+                text, markup = build_channel_memory_ui(saved_channels, page=1, mode="select")
+                await query.message.edit_text(text, reply_markup=markup)
+                await query.answer("Loaded saved channels ⚡")
+            else:
+                PENDING_TASKS[user_id]["status"] = "waiting_id"
+                buttons = [
+                    [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_setup")]
+                ]
+                await query.message.edit(
+                    "📝 <b>Send the Target Chat ID or Link</b>\n\n"
+                    "Examples:\n"
+                    "• Channel/Group: <code>-100123456789</code>\n"
+                    "• Specific Topic: <code>-100123456789/5</code>\n"
+                    "• Public Link: <code>https://t.me/your_channel</code>\n\n"
+                    "💡 <i>I will automatically save this channel to your quick memory once tested!</i>",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+                await query.answer()
+    except Exception as e:
+        print(f"[destination_callback notice]: {e}")
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
 # ======================================
 # --- NAYA FORMAT MENU LOGIC START ---
@@ -3152,21 +3171,25 @@ async def channel_memory_page_callback(client: Client, query: CallbackQuery):
     if not is_authorized(user_id):
         return await query.answer("⛔ Access Denied.", show_alert=True)
     
-    match = query.matches[0]
-    if match.group(1):
-        page = int(match.group(1))
-        mode = match.group(2) or "view"
-    else:
-        page = int(match.group(3))
-        mode = "view" 
-    
-    saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
-    text, markup = build_channel_memory_ui(saved_channels, page=page, mode=mode)
     try:
+        match = query.matches[0]
+        if match.group(1):
+            page = int(match.group(1))
+            mode = match.group(2) or "view"
+        else:
+            page = int(match.group(3))
+            mode = "view" 
+        
+        saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
+        text, markup = build_channel_memory_ui(saved_channels, page=page, mode=mode)
         await query.message.edit_text(text, reply_markup=markup)
         await query.answer(f"Page {page} loaded ⚡")
-    except Exception:
-        await query.answer()
+    except Exception as e:
+        print(f"[channel_memory_page_callback notice]: {e}")
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
 @app.on_callback_query(filters.regex(r"^ch_del:(-?\d+):?(\d+)?:?(\d+)?"))
 async def channel_memory_delete_callback(client: Client, query: CallbackQuery):
