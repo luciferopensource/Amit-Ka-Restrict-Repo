@@ -2814,22 +2814,23 @@ def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int 
         buttons.append(nav_row)
 
     # Bottom management action row
-    action_row = []
     if mode == "delete":
-        action_row.append(InlineKeyboardButton("🔙 Back to Channel List", callback_data=f"ch_page:{page}:view"))
-        action_row.append(InlineKeyboardButton("❌ Close", callback_data="ch_close"))
+        buttons.append([
+            InlineKeyboardButton("🔙 Back to Channel List", callback_data=f"ch_page:{page}:view"),
+            InlineKeyboardButton("❌ Close", callback_data="ch_close")
+        ])
     elif mode == "view":
-        action_row.append(InlineKeyboardButton("➕ Add Channel", callback_data="prompt_add_channel"))
+        action_row = [InlineKeyboardButton("➕ Add Channel", callback_data="prompt_add_channel")]
         if total_channels > 0:
             action_row.append(InlineKeyboardButton("🗑️ Bulk Delete Mode", callback_data=f"ch_page:{page}:delete"))
         buttons.append(action_row)
         buttons.append([InlineKeyboardButton("❌ Close", callback_data="ch_close")])
     else:
-        action_row.append(InlineKeyboardButton("✏️ Enter Other ID/Link", callback_data="ch_manual"))
+        action_row = [InlineKeyboardButton("✏️ Enter Other ID/Link", callback_data="ch_manual")]
         if total_channels > 0:
             action_row.append(InlineKeyboardButton("🗑️ Delete Channels", callback_data=f"ch_page:{page}:delete"))
         action_row.append(InlineKeyboardButton("🛑 Cancel", callback_data="cancel_setup"))
-    buttons.append(action_row)
+        buttons.append(action_row)
     
     footer_text = f"\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💎 <i>Showing {start_idx + 1 if total_channels else 0}–{end_idx} of {total_channels} saved channels • 10/Page</i>"
     return header_text + footer_text, InlineKeyboardMarkup(buttons)
