@@ -433,7 +433,7 @@ Ye bot filhaal private VIP list pe chal raha hai.
 💸 Pocket Pinch: Sirf ₹50 / Month (Chai-sutta se sasta!)
 ╠══════════════════════════════════════════════════════╣
 👑 Whitelist hona hai? Message Owner:
-👉 @lucifermorningstarofficialsss
+👉 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -454,7 +454,7 @@ jaoge? Dhakka-mukki nahi karne ka, line me lago!
 ☕ Price: Sirf ₹50 / Month (Tapri ki 2 chai se bhi sasta!)
 ╠══════════════════════════════════════════════════════╣
 🤝 Izzat ke sath access lene ke liye Owner ko ping karo:
-👑 @lucifermorningstarofficialsss
+👑 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -475,7 +475,7 @@ hain jisme aapka poora fayda hai.
 💰 The Valuation: Sirf ₹50 / Month (Popcorn se bhi sasta!)
 ╠══════════════════════════════════════════════════════╣
 👑 Deal done karni hai? Owner ko abhi text bhejo:
-👉 @lucifermorningstarofficialsss
+👉 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -495,7 +495,7 @@ nitrogen bhari hoti hai! Par yahan ₹50 me beast bot milega:
 🏷️ Subscription: Sirf ₹50 / Month (Chai-sutta kharcha!)
 ╠══════════════════════════════════════════════════════╣
 👑 Whitelist karwane ke liye abhi Owner se contact karo:
-🔗 @lucifermorningstarofficialsss
+🔗 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -515,7 +515,7 @@ ghusne ki koshish kar raha hai! System ne lock laga diya!
 💵 Faisla: Sirf ₹50 / Month (Chai-sutta se sasta deal)
 ╠══════════════════════════════════════════════════════╣
 👑 Case solve karne ke liye Owner ko hazir karo:
-👉 @lucifermorningstarofficialsss
+👉 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -536,7 +536,7 @@ Par afsos, aapka Telegram ID abhi approved nahi hai.
 💳 Bill Amount: ₹50 / Month Only (Full Pocket Friendly)
 ╠══════════════════════════════════════════════════════╣
 📩 VIP Table book karne ke liye Owner ko contact karein:
-👑 @lucifermorningstarofficialsss
+👑 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -557,7 +557,7 @@ lock hai. Par syllabus dekh lo, full marks aayenge:
 🏷️ Admission Fee: Sirf ₹50 / Month (Chai-sutta se sasta)
 ╠══════════════════════════════════════════════════════╣
 👑 Principal (Owner) se signature karwane ke liye click:
-👉 @lucifermorningstarofficialsss
+👉 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -578,7 +578,7 @@ Ye train sirf verified VIP passengers ke liye chalti hai.
 🎟️ Monthly Ticket: Sirf ₹50 / Month (Platform ticket rate!)
 ╠══════════════════════════════════════════════════════╣
 👑 TTE (Owner) se ticket lene ke liye abhi sampark karein:
-🔗 @lucifermorningstarofficialsss
+🔗 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -599,7 +599,7 @@ Par ye bot exclusive private members ke liye reserved hai.
 🎟️ Monthly Pass: Sirf ₹50 / Month (Chai-sutta kharcha!)
 ╠══════════════════════════════════════════════════════╣
 👑 VIP Subscription lene ke liye Owner ko ping karein:
-👉 @lucifermorningstarofficialsss
+👉 the Bot Admin
 ╚══════════════════════════════════════════════════════╝""",
 
     """╔══════════════════════════════════════════════════════╗
@@ -620,7 +620,7 @@ Maaf karna lala, bina whitelist huye bot nahi hilega!
 💰 Hissa: Sirf ₹50 / Month (Chai-sutta se bhi sasta plan!)
 ╠══════════════════════════════════════════════════════╣
 👑 Sarkar (Owner) ke aage arzi lagane ke liye click karo:
-👉 @lucifermorningstarofficialsss
+👉 the Bot Admin
 ╚══════════════════════════════════════════════════════╝"""
 ]
 
@@ -646,27 +646,30 @@ async def auth_gatekeeper(client: Client, message: Message):
         if is_start or (now - last_sent > 5):
             UNAUTH_NOTIFY_CACHE[user_id] = now
             try:
-                owner_username = os.environ.get("OWNER_USERNAME", "").strip().lstrip("@") or "lucifermorningstarofficialsss"
-                owner_url = f"https://t.me/{owner_username}"
+                owner_username = os.environ.get("OWNER_USERNAME", "").strip().lstrip("@")
                 custom_override = os.environ.get("ACCESS_DENIED_MESSAGE", "").strip()
                 if custom_override:
                     body = custom_override
                 else:
                     body = random.choice(UNAUTH_TEMPLATES)
-                    if owner_username != "lucifermorningstarofficialsss":
-                        body = body.replace("@lucifermorningstarofficialsss", f"@{owner_username}")
+                    if owner_username:
+                        body = body.replace("the Bot Admin", f"@{owner_username}")
 
+                owner_label = f"@{owner_username}" if owner_username else "Bot Administrator"
                 reply_parts = [
                     f"<pre>{body}</pre>",
                     "",
                     f"🆔 <b>Your Telegram User ID:</b> <code>{user_id}</code>",
-                    f'👑 <b>Owner:</b> @{owner_username}',
-                    "<i>(Click button below or copy your ID and message the owner to get whitelisted)</i>"
+                    f'👑 <b>Owner:</b> {owner_label}',
+                    "<i>(Contact your bot administrator to get whitelisted)</i>"
                 ]
                 reply_text = chr(10).join(reply_parts)
-                markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("👑 Contact Owner (Get Access)", url=owner_url)]
-                ])
+                if owner_username:
+                    markup = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("👑 Contact Owner (Get Access)", url=f"https://t.me/{owner_username}")]
+                    ])
+                else:
+                    markup = None
                 try:
                     await message.reply(
                         reply_text,
@@ -1534,33 +1537,25 @@ async def send_start(client: Client, message: Message):
     except Exception as e:
         print(f"Failed to save user {user_id}: {e}")
 
-    welcome_video_url = "https://holy-field-055f.lucifermotivational.workers.dev/0:/Google%20Flow%20%E2%80%93%20Sept%2004%20-%2016-28.mp4"
     welcome_text = (
         f"<b>👋 Hi {message.from_user.mention}, I am Save Restricted Content Bot.</b>\n\n"
         "<b>For downloading restricted content /login first.</b>\n\n"
         "<b>Know how to use bot by - /help</b>"
     )
     
-    buttons = [
-        [InlineKeyboardButton("❣️ Developer", url = "https://t.me/LuciferOpenSource")],
-        [InlineKeyboardButton('🔍 sᴜᴘᴘᴏʀᴛ ɢʀᴏᴜᴘ', url='https://t.me/LuciferOpenSourceDiscussionGroup'), InlineKeyboardButton('🤖 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url='https://t.me/LuciferOpenSource')]
-    ]
+    owner_username = os.environ.get("OWNER_USERNAME", "").strip().lstrip("@")
+    buttons = []
+    if owner_username:
+        buttons.append([InlineKeyboardButton("👑 Admin Contact", url=f"https://t.me/{owner_username}")])
+    
+    markup = InlineKeyboardMarkup(buttons) if buttons else None
 
-    try:
-        await client.send_video(
-            chat_id=message.chat.id, 
-            video=welcome_video_url, 
-            caption=welcome_text, 
-            reply_markup=InlineKeyboardMarkup(buttons),
-            reply_to_message_id=message.id
-        )
-    except Exception as e:
-        await client.send_message(
-            chat_id=message.chat.id,
-            text=welcome_text,
-            reply_markup=InlineKeyboardMarkup(buttons),
-            reply_to_message_id=message.id
-        )
+    await message.reply(
+        welcome_text,
+        reply_markup=markup,
+        quote=True,
+        disable_web_page_preview=True
+    )
 
 @app.on_message(filters.command(["help"]) & filters.private & ~filters.bot)
 async def send_help(client: Client, message: Message):

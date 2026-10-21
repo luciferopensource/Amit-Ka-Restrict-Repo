@@ -32,7 +32,7 @@
 
 > 📢 **Official Channel:** [@LuciferOpenSource](https://t.me/LuciferOpenSource)  
 > 💬 **Support Group:** [@LuciferOpenSourceDiscussionGroup](https://t.me/LuciferOpenSourceDiscussionGroup)  
-> 🍿 **Movie Request Group:** [@RequestLuciferDatabase](https://t.me/RequestLuciferDatabase)  
+> 🍿 **Movie Request Group:** (https://t.me/)  
 > 🌟 **GitHub Repository:** [Auto-Filter-Bot-Lucifer](https://github.com/ailuciferbaba-pixel/Auto-Filter-Bot-Lucifer/)  
 > 👨‍💻 **GitHub Profile:** [ailuciferbaba-pixel](https://github.com/ailuciferbaba-pixel)  
 > 👑 **Lead Developer:** **Lucifer Morningstar**  
@@ -107,7 +107,7 @@ Crucially, every media file and caption undergoes an automated sanitisation pass
 * 🛡️ **Graceful Download/Upload Fallback:** If server-side copying is blocked by channel permissions or restricted flags, the system seamlessly transitions into a chunked background download/upload pipeline with live progress telemetry.
 * 🧹 **Stremio-Optimised Media Sanitiser:** Strips hidden HTML promotional hyperlinks and cleans over 100 promotional domain names (e.g., *VegaMovies, 4kHdHub, Bollyflix, 1XBET*) while rigorously protecting bracketed technical metadata (`[Hindi]`, `[Dual Audio]`, `[HEVC]`, `[S01E01]`, `[4K]`).
 * 📦 **True Extension & Split-Suffix Parser:** Accurately distinguishes between actual media extensions (`.mkv`, `.mp4`) and Telegram split suffixes (`.001` to `.999`). Injects missing quality markers (e.g. `720p`) before the true extension (`Movie 720p.mkv.001`), completely eliminating corrupted split-file naming.
-* 💾 **Standardised Media Footers:** Automatically computes true file size in human-readable decimal format (`💾 Size: 1015.20 MB`) and appends sovereign channel signatures (`⚜️ Powered By : [@luciferdatabase]`) with idempotent deduplication across retries.
+* 💾 **Standardised Media Footers:** Automatically computes true file size in human-readable decimal format (`💾 Size: 1015.20 MB`) and appends sovereign channel signatures (``) with idempotent deduplication across retries.
 * ✂️ **Automatic 2GB+ File Splitting:** Detects files exceeding Telegram's 2000MB bot threshold and transparently splits them into 1900MB parts using native `split` or `7z/7za` before uploading.
 * 🛰️ **Autonomous Multi-Target Watchers:** Monitors source channels and forum topics 24/7. When new posts arrive, they are filtered by media type (Video, Document, Photo, Audio, etc.), sanitised, and dispatched to multiple destinations simultaneously with configurable inter-message delay.
 * 🧠 **Persistent Resumption Brain:** Synchronisation progress is tracked post-by-post in MongoDB (`sync_progress` collection). Abrupt host restarts resume cleanly from the exact last successful message ID.
@@ -159,7 +159,7 @@ The synchronisation pipeline operates across distinct, fault-tolerant phases:
                              📝 CAPTION & FOOTER ASSEMBLY
                      ├─ Format cleaned caption within 1024-char limit
                      ├─ Compute accurate file size: 💾 Size: 1015.20 MB
-                     └─ Append sovereign join line: ⚜️ Powered By : [@luciferdatabase]
+                     └─ Append sovereign join line: 
                                          │
                                          ▼
                              📊 PROGRESS & DISPATCH ENGINE
@@ -239,7 +239,7 @@ The synchronisation pipeline operates across distinct, fault-tolerant phases:
 | **Split-Suffix Preservation** | ✅ | `restrict_bot.py:512` | Separates true extension (`.mkv`) from split suffix (`.001`). |
 | **Pre-Extension Quality Fix** | ✅ | `restrict_bot.py:648` | Inserts quality (`720p`) before real extension, never after. |
 | **Accurate File Size Footer** | ✅ | `restrict_bot.py:586` | Computes decimal byte size: `💾 Size: 1015.20 MB`. |
-| **Sovereign Channel Footer** | ✅ | `restrict_bot.py:596` | Appends `⚜️ Powered By : [@luciferdatabase]` with zero duplicates. |
+| **Sovereign Channel Footer** | ✅ | `restrict_bot.py:596` | Appends `` with zero duplicates. |
 | **2GB+ Telegram Splitting** | ✅ | `restrict_bot.py:795` | Splits oversized files into 1900MB chunks via `split`/`7z`. |
 | **Live Multi-Target Watchers** | ✅ | `restrict_bot.py:210` | 24/7 monitoring of source channels with multi-destination dispatch. |
 | **Content Type Filtering** | ✅ | `restrict_bot.py:1959` | Selectable filters: Video, Document, Photo, Audio, Voice, etc. |
@@ -663,7 +663,7 @@ Cleaned Caption Text
 
 💾 Size: 1015.20 MB
 
-⚜️ Powered By : [@luciferdatabase]
+
 ```
 * File size is calculated directly from actual Telegram binary bytes or local filesystem statistics.
 * Deduplication guards guarantee that retries or fallbacks never duplicate the footer block.
@@ -1218,7 +1218,7 @@ SOFTWARE.
 
 [![Official Channel](https://img.shields.io/badge/Telegram-Official_Channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/LuciferOpenSource)
 [![Support Group](https://img.shields.io/badge/Telegram-Support_Group-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/LuciferOpenSourceDiscussionGroup)
-[![Request Group](https://img.shields.io/badge/Telegram-Movie_Request_Group-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/RequestLuciferDatabase)
+[![Request Group](https://img.shields.io/badge/Telegram-Movie_Request_Group-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/)
 [![GitHub](https://img.shields.io/badge/GitHub-ailuciferbaba--pixel-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ailuciferbaba-pixel)
 
 <br>
