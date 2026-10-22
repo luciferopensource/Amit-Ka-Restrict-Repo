@@ -1788,7 +1788,7 @@ async def tasks_refresh_callback(client: Client, query: CallbackQuery):
         info["needs_refresh"] = True
     await query.answer("✅ Active tasks refreshed!", show_alert=True)
 
-PAGE_SIZE_WATCHERS = 20
+PAGE_SIZE_WATCHERS = 10
 
 def build_watchers_page_ui(user_watchers, page=0, is_admin_view=False):
     total = len(user_watchers)
@@ -1799,54 +1799,43 @@ def build_watchers_page_ui(user_watchers, page=0, is_admin_view=False):
     end_idx = min(start_idx + PAGE_SIZE_WATCHERS, total)
     page_items = user_watchers[start_idx:end_idx]
 
-    title = "📊 <b>Global Surveillance Mappings (Admin View):</b>\n" if is_admin_view else "📊 <b>Your Active Surveillance Channels (Watchers):</b>\n"
+    title = "📊 <b>Global Surveillance Mappings (Admin View):</b>\n\n" if is_admin_view else "📊 <b>Your Active Surveillance Channels (Watchers):</b>\n\n"
     text = title
     text += f"📑 <b>Page:</b> <code>{page + 1}/{total_pages}</code> • Total Watchers: <code>{total}</code>\n"
     text += "─────────────────────────\n\n"
-
-    delete_buttons = []
-    current_row = []
 
     for rel_idx, w in enumerate(page_items):
         idx = start_idx + rel_idx + 1
         src_id = w['source_id']
         src_thread = w.get('source_thread')
-        src_display = (w.get('source_title') or str(src_id))[:18]
-        th = f" [T:{src_thread}]" if src_thread else ""
+        src_display = w.get('source_title') or str(src_id)
+        th_info = f" (Topic: {src_thread})" if src_thread else ""
 
         targets = w.get('targets', [])
         if not targets and 'dest_id' in w:
             targets = [{"dest_id": w['dest_id'], "dest_thread": w.get('dest_thread'), "dest_title": w.get('dest_title')}]
 
         filters_list = w.get('allowed_types', ['All Media'])
-        flt_str = ", ".join(filters_list)[:14]
+        flt_str = ", ".join(filters_list)
         fmts = w.get('text_format', [])
-        fmt_str = "+".join(fmts)[:10] if fmts else "Default"
+        fmt_str = ", ".join(fmts) if fmts else "Default"
         delay_val = w.get('delay', 0)
-        owner_info = f" | 👤<code>{w.get('user_id')}</code>" if is_admin_view else ""
+        owner_info = f" | 👤 <code>{w.get('user_id')}</code>" if is_admin_view else ""
 
-        t_list = []
-        for t in targets[:2]:
-            t_name = (t.get('dest_title') or str(t['dest_id']))[:12]
-            t_th = f"[T:{t['dest_thread']}]" if t.get('dest_thread') else ""
-            t_list.append(f"{html.escape(t_name)}{t_th}")
-        if len(targets) > 2:
-            t_list.append(f"+{len(targets)-2}")
-        tgt_str = ", ".join(t_list) if t_list else "None"
+        text += f"<b>{idx}. 📥 {html.escape(src_display)}{th_info}</b>{owner_info}\n"
+        text += f"   <code>{src_id}</code>\n"
+        text += f"   🎛 Filters: {html.escape(flt_str)}\n"
+        text += f"   📝 Format: {html.escape(fmt_str)}\n"
+        text += f"   ⏱ Delay: {delay_val}s\n"
+        text += f"   ⤵️ Targets ({len(targets)}):\n"
 
-        text += (
-            f"<b>{idx}. 📥 {html.escape(src_display)}{th}</b> (<code>{src_id}</code>){owner_info}\n"
-            f"   └ 🎛 <code>{flt_str}</code> • 📝 <code>{fmt_str}</code> • ⏱ <code>{delay_val}s</code> ➜ 📤 {tgt_str}\n"
-        )
+        for t in targets:
+            dst_id = t.get('dest_id')
+            dst_display = t.get('dest_title') or str(dst_id)
+            dst_th = f" (Topic: {t['dest_thread']})" if t.get('dest_thread') else ""
+            text += f"   • {html.escape(dst_display)}{dst_th} (<code>{dst_id}</code>)\n"
 
-        topic_param = src_thread if src_thread else 0
-        current_row.append(InlineKeyboardButton(f"🗑 #{idx}", callback_data=f"unwatch_{src_id}_{topic_param}_{page}"))
-        if len(current_row) == 4:
-            delete_buttons.append(current_row)
-            current_row = []
-
-    if current_row:
-        delete_buttons.append(current_row)
+        text += "\n"
 
     nav_buttons = []
     if total_pages > 1:
@@ -1858,8 +1847,6 @@ def build_watchers_page_ui(user_watchers, page=0, is_admin_view=False):
         nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"watchers_pg:{next_page}:{admin_flag}"))
 
     full_markup = []
-    if delete_buttons:
-        full_markup.extend(delete_buttons)
     if nav_buttons:
         full_markup.append(nav_buttons)
 
