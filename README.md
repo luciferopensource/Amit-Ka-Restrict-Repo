@@ -389,6 +389,12 @@ Every configuration parameter is derived directly from the application source co
 | `/botstats` | — | Admins Only | `/botstats` | Detailed analytics breakdown of registered users, sessions, and tasks. |
 | `/log` | — | Admins & Sudos | `/log` | Transmits the active application log file (`bot.log`) as a Telegram document. |
 | `/broadcast` | — | Admins Only | `/broadcast` *(reply)* | Broadcasts the replied message to all registered bot users with metrics. |
+| /channelstats | /watchstats, /stats, /analytics | All Users | /channelstats | Performance & Channel Intelligence Dashboard (Daily, Weekly, Monthly, Lifetime deliveries). |
+| /channelhistory | — | All Users | /channelhistory | Interactive separate channel history dossier with 1-page-per-channel navigation. |
+| /replace | /rebrand, /replacements | All Users | /replace <old> -> <new> | Re-branding engine to replace watermarks, links, and text patterns. |
+| /setthumb | /setthumbnail | All Users | /setthumb *(reply to photo)* | Sets custom thumbnail for all uploaded documents and video files. |
+| /viewthumb | /mythumb | All Users | /viewthumb | Views currently saved custom thumbnail. |
+| /delthumb | /clearthumb | All Users | /delthumb | Deletes saved custom thumbnail. |
 | `/toggledl` | — | Admins & Sudos | `/toggledl` | Toggles global auto-download fallback mode (ON: Download/Upload, OFF: Direct Only). |
 | `/pixel` | — | Admins & Sudos | `/pixel <URL>` | Bypasses Pixeldrain rate limits by generating direct high-speed CDN URLs. |
 

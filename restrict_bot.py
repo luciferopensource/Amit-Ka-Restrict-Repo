@@ -294,21 +294,39 @@ class Database:
         except Exception:
             return False
 
-    async def inc_forward_stats(self, user_id: int, is_fast_copy: bool = True, size_bytes: int = 0):
+    async def inc_forward_stats(self, user_id: int, is_fast_copy: bool = True, size_bytes: int = 0, source_id=None):
         if self.db is None or not user_id: return
         try:
-            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+            now = datetime.datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            year, week_num, _ = now.isocalendar()
+            week_str = f"{year}-W{week_num:02d}"
+            month_str = now.strftime("%Y-%m")
             update = {
                 "$inc": {
                     "total_forwards": 1,
                     f"daily.{today_str}": 1,
+                    f"weekly.{week_str}": 1,
+                    f"monthly.{month_str}": 1,
                     "fast_copy_count" if is_fast_copy else "download_count": 1,
                     "bytes_saved" if is_fast_copy else "bytes_downloaded": int(size_bytes)
                 }
             }
+            if source_id is not None:
+                s_key = str(source_id).replace(".", "_")
+                update["$inc"][f"channels.{s_key}.total"] = 1
+                update["$inc"][f"channels.{s_key}.daily.{today_str}"] = 1
+                update["$inc"][f"channels.{s_key}.weekly.{week_str}"] = 1
+                update["$inc"][f"channels.{s_key}.monthly.{month_str}"] = 1
+                if is_fast_copy:
+                    update["$inc"][f"channels.{s_key}.fast_copy_count"] = 1
+                    update["$inc"][f"channels.{s_key}.bytes_saved"] = int(size_bytes)
+                else:
+                    update["$inc"][f"channels.{s_key}.download_count"] = 1
+                    update["$inc"][f"channels.{s_key}.bytes_downloaded"] = int(size_bytes)
             await self.db.stats.update_one({"user_id": int(user_id)}, update, upsert=True)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[inc_forward_stats notice]: {e}")
 
     async def get_forward_stats(self, user_id: int):
         if self.db is None or not user_id: return {}
@@ -2360,17 +2378,19 @@ async def status_style_handler(client, message):
     
     auto_dl = "ON ✅" if await db.get_dl_status() else "OFF ❌"
 
-    msg = (
-        f"🔰 **SYSTEM DASHBOARD**\n\n"
-        f"⏱ **Uptime:** `{uptime_str}`\n"
-        f"🧠 **RAM:** `{mem}%`  │  ⚙️ **CPU:** `{cpu}%` \n"
-        f"💿 **Disk Free:** `{disk_free:.1f} GB` \n"
-        f"🔄 **Auto-Download:** `{auto_dl}` \n\n"
-        f"👀 **Live Watchers:** `{watcher_count}` running\n"
-        f"📉 **Active Downloads ({active_count})**\n"
-        f"{queue_text}"
+    status_body = (
+        f"🔰 SYSTEM DASHBOARD\n"
+        f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"⏱ Uptime: {uptime_str}\n"
+        f"🧠 RAM: {mem}%  │  ⚙️ CPU: {cpu}% \n"
+        f"💿 Disk Free: {disk_free:.1f} GB \n"
+        f"🔄 Auto-Download: {auto_dl} \n\n"
+        f"👀 Live Watchers: {watcher_count} running\n"
+        f"📉 Active Downloads ({active_count}):\n"
+        f"{queue_text}\n"
+        f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
     )
-    await message.reply(msg, quote=True)
+    await message.reply(f"<pre>{html.escape(status_body)}</pre>", quote=True, parse_mode=enums.ParseMode.HTML)
     
 @app.on_message(filters.command(["log"]) & filters.private & ~filters.bot)
 async def send_log_handler(client: Client, message: Message):
@@ -2474,22 +2494,24 @@ async def build_bot_stats_ui(page: int = 1, page_size: int = 10):
 
     users_text = chr(10).join(user_blocks) if user_blocks else "<i>No registered users found in directory.</i>"
 
-    stats_msg = (
-        "👑 <b>SYSTEM BOT STATISTICS</b> 👑\n"
+    users_plain = chr(10).join(re.sub(r'<[^>]+>', '', b) for b in user_blocks) if user_blocks else "No registered users found in directory."
+    stats_body = (
+        "👑 SYSTEM BOT STATISTICS 👑\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
-        "🏛️ <b>EXECUTIVE OVERVIEW:</b>\n"
-        f"• 👥 <b>Total Registered:</b> <code>{total_users}</code>\n"
-        f"• 🔑 <b>Logged-in Sessions:</b> <code>{logged_in_count}</code>\n"
-        f"• 🟢 <b>Active Runners:</b> <code>{active_users_count}</code>\n"
-        f"• 🟡 <b>Idle Standby:</b> <code>{idle_users_count}</code>\n"
-        f"• ⚪ <b>Unauthenticated:</b> <code>{no_session_count}</code>\n"
-        f"• ⚡ <b>Running Workloads:</b> <code>{total_active_tasks}</code>\n\n"
+        "🏛️ EXECUTIVE OVERVIEW:\n"
+        f"• 👥 Total Registered: {total_users}\n"
+        f"• 🔑 Logged-in Sessions: {logged_in_count}\n"
+        f"• 🟢 Active Runners: {active_users_count}\n"
+        f"• 🟡 Idle Standby: {idle_users_count}\n"
+        f"• ⚪ Unauthenticated: {no_session_count}\n"
+        f"• ⚡ Running Workloads: {total_active_tasks}\n\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        f"📜 <b>USER DIRECTORY (Page {page}/{total_pages}):</b>\n\n"
-        f"{users_text}\n\n"
+        f"📜 USER DIRECTORY (Page {page}/{total_pages}):\n\n"
+        f"{users_plain}\n\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        f"💎 <i>Showing {start_idx + 1 if total_users else 0}–{end_idx} of {total_users} users • 10 Users/Page</i>"
+        f"💎 Showing {start_idx + 1 if total_users else 0}–{end_idx} of {total_users} users • 10 Users/Page"
     )
+    stats_msg = f"<pre>{html.escape(stats_body)}</pre>"
 
     buttons = []
     if total_pages > 1:
@@ -3120,6 +3142,33 @@ async def save(client: Client, message: Message):
     is_restricted, status_text = await check_link_restriction(user_id, link_text)
     await wait_msg.delete()
 
+    # 🚀 Auto-save source channel into Saved Sources
+    try:
+        source_cid = None
+        source_th = None
+        if "t.me/c/" in link_text:
+            parts_s = link_text.split("t.me/c/")[1].split("/")
+            chat_p = parts_s[0].strip()
+            source_cid = int(f"-100{chat_p}") if not chat_p.startswith("-100") else int(chat_p)
+            if len(parts_s) > 2 and parts_s[2].strip().isdigit():
+                source_th = int(parts_s[1].strip())
+        elif "t.me/" in link_text:
+            parts_s = link_text.split("t.me/")[1].split("/")
+            source_cid = parts_s[0].strip()
+            if len(parts_s) > 2 and parts_s[2].strip().isdigit():
+                source_th = int(parts_s[1].strip())
+        if source_cid:
+            asyncio.create_task(db.save_channel(
+                user_id=user_id,
+                channel_id=source_cid,
+                channel_title=f"Chat {source_cid}",
+                channel_type="source",
+                thread_id=source_th
+            ))
+            asyncio.create_task(auto_resolve_channel_title(client, user_id, source_cid, channel_type="source"))
+    except Exception:
+        pass
+
     PENDING_TASKS[user_id] = {
         "link": link_text, 
         "status": "waiting_choice",
@@ -3420,6 +3469,47 @@ def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int 
     footer_text = f"\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💎 <i>Showing {start_idx + 1 if total_channels else 0}–{end_idx} of {total_channels} saved {type_label.lower()} channels • 10/Page</i>"
     return header_text + footer_text, InlineKeyboardMarkup(buttons)
 
+@app.on_callback_query(filters.regex(r"^dm_dest:(saved_messages|bot_chat|back)$"))
+async def dm_dest_choice_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id not in PENDING_TASKS:
+        return await query.answer("❌ Task expired. Please send the link again.", show_alert=True)
+    
+    choice = query.data.split(":")[1]
+    if choice == "back":
+        buttons = [
+            [InlineKeyboardButton("📂 Send to DM (Saved / Bot)", callback_data="dest_dm")],
+            [InlineKeyboardButton("📢 Send to Channel/Group", callback_data="dest_custom")],
+            [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_setup")]
+        ]
+        await query.message.edit_text(
+            "✨ <b>Destination Selection</b>\n\nWhere should I send the forwarded files?",
+            reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode=enums.ParseMode.HTML
+        )
+        await query.answer()
+        return
+
+    if choice == "saved_messages":
+        user_sess = await db.get_session(user_id)
+        if not user_sess:
+            return await query.answer(
+                "⚠️ Saved Messages requires your account to be logged in (/login).\nPlease login first or choose 'Bot Private Chat'.",
+                show_alert=True
+            )
+        PENDING_TASKS[user_id]["dest_chat_id"] = "me"
+        PENDING_TASKS[user_id]["dest_thread_id"] = None
+        PENDING_TASKS[user_id]["dest_title"] = "Saved Messages"
+        PENDING_TASKS[user_id]["is_saved_messages"] = True
+    else:
+        PENDING_TASKS[user_id]["dest_chat_id"] = user_id
+        PENDING_TASKS[user_id]["dest_thread_id"] = None
+        PENDING_TASKS[user_id]["dest_title"] = "Bot Private Chat"
+        PENDING_TASKS[user_id]["is_saved_messages"] = False
+
+    await ask_for_speed(query.message)
+    await query.answer()
+
 @app.on_callback_query(filters.regex("^dest_"))
 async def destination_callback(client: Client, query):
     user_id = query.from_user.id
@@ -3428,10 +3518,21 @@ async def destination_callback(client: Client, query):
     choice = query.data
     try:
         if choice == "dest_dm":
-            PENDING_TASKS[user_id]["dest_chat_id"] = user_id
-            PENDING_TASKS[user_id]["dest_thread_id"] = None
-            await ask_for_speed(query.message)
+            buttons = [
+                [InlineKeyboardButton("📥 Saved Messages (Your Account)", callback_data="dm_dest:saved_messages")],
+                [InlineKeyboardButton("🤖 Bot Private Chat (Here)", callback_data="dm_dest:bot_chat")],
+                [InlineKeyboardButton("🔙 Back to Destination Selection", callback_data="dm_dest:back")]
+            ]
+            await query.message.edit(
+                "📂 <b>Direct Message (DM) Destination:</b>\n\n"
+                "<i>Please select where you want the forwarded files delivered:</i>\n\n"
+                "• 📥 <b>Saved Messages:</b> Direct to your personal Telegram Saved Messages cloud.\n"
+                "• 🤖 <b>Bot Private Chat:</b> Direct here in this bot conversation.",
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode=enums.ParseMode.HTML
+            )
             await query.answer()
+            return
         elif choice == "dest_custom":
             saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
             if saved_channels:
@@ -5239,35 +5340,52 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
     # 🚀 EXACT TEXT MESSAGE CLONE WITH NEW CAPTION
     if "Text" == msg_type:
         for dest in targets:
-            try: 
-                await client.send_message(
-                    chat_id=dest['dest_id'], 
-                    text=clean_caption,
-                    reply_markup=msg.reply_markup,
-                    reply_to_message_id=dest.get('dest_thread'),
-                    parse_mode=enums.ParseMode.HTML,
-                    disable_web_page_preview=True
-                )
-            except Exception as e_text:
-                if "TOO_LONG" in str(e_text):
-                    clean_caption = re.sub(r'<[^>]+>', '', clean_caption)[:4000]
-                    try: await client.send_message(chat_id=dest['dest_id'], text=clean_caption, reply_markup=msg.reply_markup, reply_to_message_id=dest.get('dest_thread'), disable_web_page_preview=True)
+            dest_target = dest['dest_id']
+            dest_thread = dest.get('dest_thread')
+            is_me = (dest_target == "me" or str(dest_target).lower() == "me")
+            if is_me:
+                try:
+                    await acc.send_message(
+                        chat_id="me",
+                        text=clean_caption,
+                        parse_mode=enums.ParseMode.HTML,
+                        disable_web_page_preview=True
+                    )
+                except Exception:
+                    clean_caption_short = re.sub(r'<[^>]+>', '', clean_caption)[:4000]
+                    try: await acc.send_message(chat_id="me", text=clean_caption_short, disable_web_page_preview=True)
                     except Exception: pass
-                else:
-                    try:
-                        await acc.send_message(
-                            chat_id=dest['dest_id'], 
-                            text=clean_caption,
-                            reply_markup=msg.reply_markup,
-                            reply_to_message_id=dest.get('dest_thread'),
-                            parse_mode=enums.ParseMode.HTML,
-                            disable_web_page_preview=True
-                        )
-                    except Exception as e_text2:
-                        if "TOO_LONG" in str(e_text2):
-                            clean_caption = re.sub(r'<[^>]+>', '', clean_caption)[:4000]
-                            try: await acc.send_message(chat_id=dest['dest_id'], text=clean_caption, reply_markup=msg.reply_markup, reply_to_message_id=dest.get('dest_thread'), disable_web_page_preview=True)
-                            except Exception: pass
+            else:
+                try: 
+                    await client.send_message(
+                        chat_id=dest_target, 
+                        text=clean_caption,
+                        reply_markup=msg.reply_markup,
+                        reply_to_message_id=dest_thread,
+                        parse_mode=enums.ParseMode.HTML,
+                        disable_web_page_preview=True
+                    )
+                except Exception as e_text:
+                    if "TOO_LONG" in str(e_text):
+                        clean_caption_short = re.sub(r'<[^>]+>', '', clean_caption)[:4000]
+                        try: await client.send_message(chat_id=dest_target, text=clean_caption_short, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread, disable_web_page_preview=True)
+                        except Exception: pass
+                    else:
+                        try:
+                            await acc.send_message(
+                                chat_id=dest_target, 
+                                text=clean_caption,
+                                reply_markup=None if dest_target == user_id else msg.reply_markup,
+                                reply_to_message_id=dest_thread,
+                                parse_mode=enums.ParseMode.HTML,
+                                disable_web_page_preview=True
+                            )
+                        except Exception as e_text2:
+                            if "TOO_LONG" in str(e_text2):
+                                clean_caption_short = re.sub(r'<[^>]+>', '', clean_caption)[:4000]
+                                try: await acc.send_message(chat_id=dest_target, text=clean_caption_short, disable_web_page_preview=True)
+                                except Exception: pass
+        await db.inc_forward_stats(user_id, is_fast_copy=True, size_bytes=0, source_id=chatid)
         return True, "success"
 
     original_filename = "unknown_file"
@@ -5290,6 +5408,27 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
         for dest in targets:
             dest_chat_id = dest['dest_id']
             dest_thread_id = dest.get('dest_thread')
+            is_me = (dest_chat_id == "me" or str(dest_chat_id).lower() == "me")
+            is_bot_dm = (dest_chat_id == user_id or str(dest_chat_id) == str(user_id))
+
+            if is_me:
+                # Saved Messages: always copy via userbot (acc)
+                try:
+                    await acc.copy_message(chat_id="me", from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
+                    forward_success = True
+                except FloodWait as e:
+                    await asyncio.sleep(e.value + 5)
+                    await acc.copy_message(chat_id="me", from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
+                    forward_success = True
+                except Exception:
+                    try:
+                        fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
+                        await acc.copy_message(chat_id="me", from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=None)
+                        forward_success = True
+                    except Exception:
+                        pass
+                continue
+
             try:
                 await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup)
                 forward_success = True
@@ -5300,21 +5439,26 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                     forward_success = True
                     continue
                 except Exception: pass
-                try:
-                    await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
-                    forward_success = True
-                except FloodWait as e:
-                    await asyncio.sleep(e.value + 5)
-                    await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
-                    forward_success = True
-                except Exception as e2:
+                
+                # Only use acc if target is not user_id (self)
+                if not is_bot_dm:
                     try:
-                        fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
-                        await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=None)
+                        await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                         forward_success = True
-                    except Exception:
-                        print(f"Task Fast-Copy blocked: {e2}")
-        if forward_success: return True, "success"
+                    except FloodWait as e:
+                        await asyncio.sleep(e.value + 5)
+                        await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
+                        forward_success = True
+                    except Exception as e2:
+                        try:
+                            fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
+                            await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=None)
+                            forward_success = True
+                        except Exception:
+                            print(f"Task Fast-Copy blocked: {e2}")
+        if forward_success:
+            await db.inc_forward_stats(user_id, is_fast_copy=True, size_bytes=media_file_size, source_id=chatid)
+            return True, "success"
 
     # 🌟 DOWNLOAD TOGGLE SAFETY CHECK
     if not auto_dl:
@@ -5362,10 +5506,18 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                                 for dest in targets:
                                     dest_chat_id = dest['dest_id']
                                     dest_thread_id = dest.get('dest_thread')
+                                    is_me = (dest_chat_id == "me" or str(dest_chat_id).lower() == "me")
+                                    sender = acc if is_me else client
                                     retry_part = 0
                                     while retry_part < 5: 
                                         try:
-                                            await client.send_document(dest_chat_id, str(part), caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid, "up"])
+                                            await sender.send_document(
+                                                dest_chat_id, str(part), caption=clean_caption, 
+                                                parse_mode=enums.ParseMode.HTML, 
+                                                reply_markup=None if is_me else msg.reply_markup, 
+                                                reply_to_message_id=dest_thread_id, 
+                                                progress=progress, progress_args=[task_uuid, "up"]
+                                            )
                                             break
                                         except FloodWait as e: 
                                             await asyncio.sleep(e.value + 5)
@@ -5381,6 +5533,7 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                     if up_task and not up_task.done(): up_task.cancel()
                     try: os.remove(file_path)
                     except Exception: pass
+                    await db.inc_forward_stats(user_id, is_fast_copy=False, size_bytes=file_size, source_id=chatid)
                     return True, "success" 
                 else:
                     try:
@@ -5441,6 +5594,9 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
         async def upload_to_dest(dest):
             dest_chat_id = dest['dest_id']
             dest_thread_id = dest.get('dest_thread')
+            is_me = (dest_chat_id == "me" or str(dest_chat_id).lower() == "me")
+            uploader = acc if is_me else client
+            rmarkup = None if is_me else msg.reply_markup
             success_local = False
             async with SERVER_UPLOAD_LIMIT:
                 async with USER_SEMAPHORES[user_id]:
@@ -5449,13 +5605,13 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                         if task_uuid and CANCEL_FLAGS.get(task_uuid): break
                         try:
                             # 🚀 EXACT UPLOAD CLONE WITH CLEAN CAPTION AND DOTTED FILENAME
-                            if "Document" == msg_type: await uploader.send_document(dest_chat_id, file_path, thumb=ph_path, caption=clean_caption, file_name=safe_filename, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid,"up"])
-                            elif "Video" == msg_type: await uploader.send_video(dest_chat_id, file_path, duration=getattr(msg.video, 'duration', 0), width=getattr(msg.video, 'width', 0), height=getattr(msg.video, 'height', 0), thumb=ph_path, caption=clean_caption, file_name=safe_filename, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid,"up"])
-                            elif "Audio" == msg_type: await uploader.send_audio(dest_chat_id, file_path, thumb=ph_path, caption=clean_caption, file_name=safe_filename, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid,"up"])
-                            elif "Photo" == msg_type: await uploader.send_photo(dest_chat_id, file_path, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread_id)
-                            elif "Voice" == msg_type: await uploader.send_voice(dest_chat_id, file_path, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid,"up"])
-                            elif "Animation" == msg_type: await uploader.send_animation(dest_chat_id, file_path, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread_id)
-                            elif "Sticker" == msg_type: await uploader.send_sticker(dest_chat_id, file_path, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread_id)
+                            if "Document" == msg_type: await uploader.send_document(dest_chat_id, file_path, thumb=ph_path, caption=clean_caption, file_name=safe_filename, parse_mode=enums.ParseMode.HTML, reply_markup=rmarkup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid,"up"])
+                            elif "Video" == msg_type: await uploader.send_video(dest_chat_id, file_path, duration=getattr(msg.video, 'duration', 0), width=getattr(msg.video, 'width', 0), height=getattr(msg.video, 'height', 0), thumb=ph_path, caption=clean_caption, file_name=safe_filename, parse_mode=enums.ParseMode.HTML, reply_markup=rmarkup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid,"up"])
+                            elif "Audio" == msg_type: await uploader.send_audio(dest_chat_id, file_path, thumb=ph_path, caption=clean_caption, file_name=safe_filename, parse_mode=enums.ParseMode.HTML, reply_markup=rmarkup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid,"up"])
+                            elif "Photo" == msg_type: await uploader.send_photo(dest_chat_id, file_path, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=rmarkup, reply_to_message_id=dest_thread_id)
+                            elif "Voice" == msg_type: await uploader.send_voice(dest_chat_id, file_path, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=rmarkup, reply_to_message_id=dest_thread_id, progress=progress, progress_args=[task_uuid,"up"])
+                            elif "Animation" == msg_type: await uploader.send_animation(dest_chat_id, file_path, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=rmarkup, reply_to_message_id=dest_thread_id)
+                            elif "Sticker" == msg_type: await uploader.send_sticker(dest_chat_id, file_path, reply_markup=rmarkup, reply_to_message_id=dest_thread_id)
                             success_local = True
                             break 
                         except FloodWait as e:
@@ -5474,7 +5630,10 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                 upload_success = True
         
         if up_task and not up_task.done(): up_task.cancel()
-        return (True, "success") if upload_success else (False, "failed")
+        if upload_success:
+            await db.inc_forward_stats(user_id, is_fast_copy=False, size_bytes=media_file_size, source_id=chatid)
+            return True, "success"
+        return False, "failed"
 
     finally:
         try: await asyncio.to_thread(shutil.rmtree, task_folder_path, ignore_errors=True)
@@ -5812,55 +5971,169 @@ async def build_channel_stats_ui(user_id: int, user_first_name: str = "User"):
     has_thumb = "✅ Active" if (file_id or local_thumb) else "❌ None"
 
     f_stats = await db.get_forward_stats(user_id)
-    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    now = datetime.datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    year, week_num, _ = now.isocalendar()
+    week_str = f"{year}-W{week_num:02d}"
+    month_str = now.strftime("%Y-%m")
+
     today_forwards = f_stats.get("daily", {}).get(today_str, 0)
+    weekly_forwards = f_stats.get("weekly", {}).get(week_str, 0)
+    monthly_forwards = f_stats.get("monthly", {}).get(month_str, 0)
     total_forwards = f_stats.get("total_forwards", 0)
+
     fast_copy_count = f_stats.get("fast_copy_count", 0)
     dl_count = f_stats.get("download_count", 0)
     total_ops = fast_copy_count + dl_count
     fast_ratio = round((fast_copy_count / max(1, total_ops)) * 100, 1) if total_ops > 0 else 100.0
     saved_gb = round((fast_copy_count * 200) / 1024, 2)
 
-    text = (
-        "📊 <b>PERFORMANCE & CHANNEL INTELLIGENCE DASHBOARD</b>\n"
+    card_body = (
+        "📊 PERFORMANCE & CHANNEL INTELLIGENCE DASHBOARD\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        f"👤 <b>Operator:</b> {html.escape(str(user_first_name))} (<code>{user_id}</code>)\n"
-        f"⏱ <b>System Uptime:</b> <code>{uptime_str}</code>\n\n"
-        "🛰️ <b>SURVEILLANCE NETWORK:</b>\n"
-        f"├ 📥 Active Watchers: <b>{watchers_count} channels</b>\n"
-        f"├ 🎯 Target Endpoints: <b>{total_targets} destinations</b>\n"
-        f"├ 📂 Saved Sources: <b>{sources_count}</b> | Destinations: <b>{dests_count}</b>\n"
-        f"├ 🏷️ Re-Branding Rules: <b>{rules_count} active</b>\n"
-        f"└ 🖼️ Custom Thumbnail: <b>{has_thumb}</b>\n\n"
-        "⚡ <b>DELIVERY ENGINE METRICS:</b>\n"
-        f"├ 📅 Today's Deliveries: <b>{today_forwards} posts</b>\n"
-        f"├ 📦 Lifetime Deliveries: <b>{total_forwards} posts</b>\n"
-        f"├ 🚀 Fast-Copy Efficiency: <b>{fast_ratio}%</b> (Tag-Free Copy)\n        ├ 📚 Smart Album Grouping: <b>✅ Active (Fast-Copy MTProto)</b>\n"
-        f"└ 🛡️ Server Bandwidth Saved: <b>~{saved_gb} GB</b> (Sevalla Friendly)\n\n"
-        "💻 <b>SERVER HARDWARE TELEMETRY:</b>\n"
-        f"├ 🧠 RAM Allocation: <b>{used_mb} MB / {total_mb} MB ({mem_percent}%)</b>\n"
-        f"├ ⚙️ CPU Workload: <b>{cpu_pct}%</b>\n"
-        "└ 🟢 Engine Status: <b>Online & Ultra-Fast</b>\n"
+        f"👤 Operator: {user_first_name} ({user_id})\n"
+        f"⏱ System Uptime: {uptime_str}\n\n"
+        "🛰️ SURVEILLANCE NETWORK:\n"
+        f"├ 📥 Active Watchers: {watchers_count} channels\n"
+        f"├ 🎯 Target Endpoints: {total_targets} destinations\n"
+        f"├ 📂 Saved Sources: {sources_count} | Destinations: {dests_count}\n"
+        f"├ 🏷️ Re-Branding Rules: {rules_count} active\n"
+        f"└ 🖼️ Custom Thumbnail: {has_thumb}\n\n"
+        "⚡ DELIVERY ENGINE METRICS:\n"
+        f"├ 📅 Today's Deliveries: {today_forwards} posts\n"
+        f"├ 🗓️ This Week's Deliveries: {weekly_forwards} posts\n"
+        f"├ 📆 This Month's Deliveries: {monthly_forwards} posts\n"
+        f"├ 📦 Lifetime Deliveries: {total_forwards} posts\n"
+        f"├ 🚀 Fast-Copy Efficiency: {fast_ratio}% (Tag-Free Copy)\n"
+        f"├ 📚 Smart Album Grouping: ✅ Active (Fast-Copy MTProto)\n"
+        f"└ 🛡️ Server Bandwidth Saved: ~{saved_gb} GB (Sevalla Friendly)\n\n"
+        "💻 SERVER HARDWARE TELEMETRY:\n"
+        f"├ 🧠 RAM Allocation: {used_mb} MB / {total_mb} MB ({mem_percent}%)\n"
+        f"├ ⚙️ CPU Workload: {cpu_pct}%\n"
+        "└ 🟢 Engine Status: Online & Ultra-Fast\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
     )
 
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="refresh_stats_ui"),
-            InlineKeyboardButton("🛰️ View Watchers", callback_data="watchers_pg:0:0")
+            InlineKeyboardButton("📜 See Separate Channel History", callback_data="ch_hist:0")
         ],
         [
-            InlineKeyboardButton("🏷️ Re-Brand Rules", callback_data="view_rebrand_ui"),
-            InlineKeyboardButton("🖼️ My Thumbnail", callback_data="view_thumb_act")
+            InlineKeyboardButton("🛰️ View Watchers", callback_data="watchers_pg:0:0"),
+            InlineKeyboardButton("🏷️ Re-Brand Rules", callback_data="view_rebrand_ui")
         ],
         [
+            InlineKeyboardButton("🖼️ My Thumbnail", callback_data="view_thumb_act"),
             InlineKeyboardButton("❌ Close Dashboard", callback_data="close_menu")
         ]
     ])
 
-    return text, markup
+    return f"<pre>{html.escape(card_body)}</pre>", markup
 
-@app.on_message(filters.command(["channelstats", "stats", "analytics"]) & filters.private & ~filters.bot)
+async def build_channel_history_ui(user_id: int, page: int = 0):
+    user_watchers = await db.get_user_watchers(user_id)
+    total_watchers = len(user_watchers)
+    if total_watchers == 0:
+        raw_empty = (
+            "📜 SEPARATE CHANNEL FORWARD HISTORY\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+            "❌ No Active Surveillance Channels Found!\n\n"
+            "You currently have 0 watchers active.\n"
+            "Add channels with /watch to monitor individual delivery stats.\n\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back to Overview", callback_data="refresh_stats_ui")]
+        ])
+        return f"<pre>{html.escape(raw_empty)}</pre>", markup
+
+    page = max(0, min(page, total_watchers - 1))
+    w = user_watchers[page]
+    source_id = w.get("source_id")
+    source_name = w.get("source_title") or w.get("source_name") or f"Channel {source_id}"
+    targets = w.get("targets", [])
+    if not targets and 'dest_id' in w:
+        targets = [{"dest_id": w.get('dest_id'), "dest_title": w.get('dest_title')}]
+
+    f_stats = await db.get_forward_stats(user_id)
+    ch_key = str(source_id).replace(".", "_")
+    ch_data = f_stats.get("channels", {}).get(ch_key, {})
+
+    now = datetime.datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    year, week_num, _ = now.isocalendar()
+    week_str = f"{year}-W{week_num:02d}"
+    month_str = now.strftime("%Y-%m")
+
+    ch_today = ch_data.get("daily", {}).get(today_str, 0)
+    ch_week = ch_data.get("weekly", {}).get(week_str, 0)
+    ch_month = ch_data.get("monthly", {}).get(month_str, 0)
+    ch_total = ch_data.get("total", 0)
+
+    delay_sec = w.get("delay", 0)
+    allowed = w.get("allowed_types", ["All Media"])
+    types_str = ", ".join(allowed) if isinstance(allowed, list) else str(allowed)
+
+    dest_summaries = []
+    for t in targets[:3]:
+        t_id = t.get("dest_id", "Unknown")
+        t_title = t.get("dest_title", str(t_id))
+        dest_summaries.append(f"• {t_title} ({t_id})")
+    if len(targets) > 3:
+        dest_summaries.append(f"• ...and {len(targets) - 3} more")
+    dest_str = "\n".join(dest_summaries) if dest_summaries else "• None"
+
+    card_body = (
+        f"📊 CHANNEL TELEMETRY & AUDIT DOSSIER\n"
+        f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"📑 Page: {page + 1}/{total_watchers} • Channel: #{page + 1}\n\n"
+        f"🛰️ SOURCE SURVEILLANCE CHANNEL:\n"
+        f"├ 🏷️ Name: {source_name}\n"
+        f"├ 🆔 Channel ID: {source_id}\n"
+        f"├ ⏱ Delay: {delay_sec}s | 🎛 Filters: {types_str}\n"
+        f"└ 🎯 Target Endpoints ({len(targets)}):\n{dest_str}\n\n"
+        f"⚡ INDIVIDUAL CHANNEL FORWARD STATUS:\n"
+        f"├ 📅 Today's Deliveries: {ch_today} posts\n"
+        f"├ 🗓️ This Week's Deliveries: {ch_week} posts\n"
+        f"├ 📆 This Month's Deliveries: {ch_month} posts\n"
+        f"└ 📦 Lifetime Deliveries: {ch_total} posts\n\n"
+        f"🟢 Engine Status: Online & Ultra-Fast\n"
+        f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+    )
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"ch_hist:{page - 1}"))
+    nav_row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_watchers}", callback_data=f"ch_hist:{page}"))
+    if page < total_watchers - 1:
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"ch_hist:{page + 1}"))
+
+    buttons = []
+    if nav_row:
+        buttons.append(nav_row)
+    buttons.append([
+        InlineKeyboardButton("🔄 Refresh Channel", callback_data=f"ch_hist:{page}"),
+        InlineKeyboardButton("🔙 Back to Overview", callback_data="refresh_stats_ui")
+    ])
+
+    return f"<pre>{html.escape(card_body)}</pre>", InlineKeyboardMarkup(buttons)
+
+@app.on_callback_query(filters.regex(r"^ch_hist:(\d+)$"))
+async def channel_history_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    match = re.match(r"^ch_hist:(\d+)$", query.data)
+    page = int(match.group(1)) if match else 0
+    text, markup = await build_channel_history_ui(user_id, page=page)
+    try:
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception:
+        pass
+    await query.answer()
+
+@app.on_message(filters.command(["channelstats", "watchstats", "channelhistory", "stats", "analytics"]) & filters.private & ~filters.bot)
 async def channel_stats_command(client: Client, message: Message):
     user_id = message.from_user.id
     if not is_authorized(user_id):
@@ -6441,6 +6714,7 @@ async def register_bot_commands(bot_client: Client) -> bool:
             BotCommand("viewthumb", "👀 View Saved Thumbnail"),
             BotCommand("delthumb", "🗑️ Delete Custom Thumbnail"),
             BotCommand("channelstats", "📊 Live Stats & Telemetry"),
+            BotCommand("watchstats", "📊 Channel Intelligence Stats"),
             BotCommand("mywatchers", "👀 Quick View Active Watchers")
         ]
 
