@@ -2501,6 +2501,20 @@ async def build_bot_stats_ui(page: int = 1, page_size: int = 10):
             nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"botstats_p:{page+1}"))
         buttons.append(nav_row)
 
+    # 🚪 Admin Kick / Logout User Buttons for logged-in users on this page
+    kick_buttons = []
+    for pos, u in enumerate(page_users, start=1):
+        u_id = u.get("id", 0)
+        has_sess = bool(u.get("session")) or (u_id in USER_CLIENTS)
+        if has_sess:
+            raw_n = u.get("name") or str(u_id)
+            short_n = html.escape(str(raw_n))[:10]
+            kick_buttons.append(InlineKeyboardButton(f"🚪 Kick #{pos} ({short_n})", callback_data=f"kick_u:{u_id}:{page}"))
+    
+    # Place kick buttons in rows of 2
+    for k_idx in range(0, len(kick_buttons), 2):
+        buttons.append(kick_buttons[k_idx:k_idx + 2])
+
     buttons.append([
         InlineKeyboardButton("🔄 Refresh Stats", callback_data=f"botstats_p:{page}"),
         InlineKeyboardButton("❌ Close", callback_data="close_menu")
@@ -2538,6 +2552,54 @@ async def bot_stats_page_callback(client: Client, query: CallbackQuery):
         await query.answer(f"Page {page} loaded ⚡")
     except Exception:
         await query.answer("Stats are up to date! 🔄")
+@app.on_callback_query(filters.regex(r"^kick_u:(\d+):(\d+)"))
+async def kick_user_callback(client: Client, query: CallbackQuery):
+    admin_id = query.from_user.id if query.from_user else 0
+    if not is_admin(admin_id):
+        return await query.answer("⛔ Access Denied: Administrator permission required.", show_alert=True)
+    
+    target_id = int(query.matches[0].group(1))
+    page = int(query.matches[0].group(2))
+
+    await query.answer(f"⏳ Terminating session for user {target_id}...", show_alert=False)
+    await force_logout_user(target_id)
+
+    text, markup = await build_bot_stats_ui(page=page)
+    try:
+        await query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        pass
+    await query.answer(f"✅ User {target_id} logged out & session kicked!", show_alert=True)
+
+@app.on_message(filters.command(["kickuser", "logoutuser", "kicksession"]) & filters.private & ~filters.bot)
+async def kick_user_command(client: Client, message: Message):
+    admin_id = message.from_user.id if message.from_user else 0
+    if not is_admin(admin_id):
+        return await message.reply("⛔ <b>Access Denied:</b> This command is restricted to administrators.", quote=True)
+
+    args = message.command
+    if len(args) < 2:
+        return await message.reply(
+            "⚠️ <b>Usage:</b> <code>/kickuser &lt;user_id&gt;</code>\n\n"
+            "Terminates the user's active session, stops their userbot instance, and clears session data.",
+            quote=True
+        )
+
+    try:
+        target_id = int(args[1].strip())
+    except ValueError:
+        return await message.reply("⚠️ Invalid User ID. Must be a numeric Telegram ID.", quote=True)
+
+    status_msg = await message.reply(f"⏳ <i>Terminating session for user <code>{target_id}</code>...</i>", quote=True)
+    await force_logout_user(target_id)
+    await status_msg.edit(
+        f"✅ <b>User Successfully Kicked & Logged Out!</b>\n\n"
+        f"• <b>Target User ID:</b> <code>{target_id}</code>\n"
+        f"• <b>Session Status:</b> Terminated & Cleared from Database\n"
+        f"• <b>Running Tasks:</b> Cancelled",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📊 View Updated Stats", callback_data="botstats_p:1")]])
+    )
+
 
         
 # ==============================================================================
@@ -3023,12 +3085,14 @@ async def unwatch_callback(client, query):
 # --- CORE: receive links / start tasks / processing / cancel checks ---
 # ==============================================================================
 
-@app.on_message((filters.text | filters.caption) & filters.private & ~filters.command(["dl", "start", "help", "cancel", "botstats", "login", "logout", "broadcast", "status", "watch", "unwatch", "watchers", "removetarget", "removesource", "log", "tasks", "progress", "toggledl", "addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel", "viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels", "setcommands", "sync_commands", "addsourcechannel", "addsource", "savesourcechannel", "savesource", "adddestinationchannel", "adddestination", "adddestchannel", "adddest", "savedestchannel", "savedestination", "viewsourcechannels", "viewsources", "viewsource", "sourcechannels", "sources", "viewdestinationchannels", "viewdestchannels", "viewdest", "viewdestination", "destchannels", "destinations"]))
+@app.on_message((filters.text | filters.caption) & filters.private & ~filters.regex(r"^/") & ~filters.command(["dl", "start", "help", "cancel", "botstats", "login", "logout", "broadcast", "status", "watch", "unwatch", "watchers", "removetarget", "removesource", "log", "tasks", "progress", "toggledl", "addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel", "viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels", "setcommands", "sync_commands", "addsourcechannel", "addsource", "savesourcechannel", "savesource", "adddestinationchannel", "adddestination", "adddestchannel", "adddest", "savedestchannel", "savedestination", "viewsourcechannels", "viewsources", "viewsource", "sourcechannels", "sources", "viewdestinationchannels", "viewdestchannels", "viewdest", "viewdestination", "destchannels", "destinations", "replace", "rebrand", "replacements", "clearreplace", "clearreplacements", "setthumb", "setthumbnail", "viewthumb", "mythumb", "thumbnail", "delthumb", "clearthumb", "deletethumb", "channelstats", "stats", "analytics", "mywatchers", "kickuser", "logoutuser", "kicksession"]))
 async def save(client: Client, message: Message):
     user_id = message.from_user.id
     if not is_authorized(user_id):
         return await message.reply('⛔ <b>Access Denied:</b> You are not authorized to use this bot.', quote=True)
     if message.text and message.text.startswith("/"):
+        try: message.continue_propagation()
+        except Exception: pass
         return
     if user_id in PENDING_ADD_CHANNEL:
         pending_val = PENDING_ADD_CHANNEL.pop(user_id, None)
@@ -6383,6 +6447,7 @@ async def register_bot_commands(bot_client: Client) -> bool:
         admin_commands = public_commands + [
             BotCommand("broadcast", "🗞 Broadcast Message"),
             BotCommand("botstats", "🔎 Check User Stats"),
+            BotCommand("kickuser", "🚪 Logout / Kick User Session"),
             BotCommand("status", "🦥 Check System Status"),
             BotCommand("log", "📄 Fetch Bot Logs"),
             BotCommand("setcommands", "🔄 Refresh Telegram Bot Commands")
