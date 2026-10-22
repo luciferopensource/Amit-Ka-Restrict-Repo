@@ -179,6 +179,18 @@ HELP_TXT = """<b>📚 TELEGRAM RESTRICT & FORWARDING BOT — MASTER USER MANUAL<
 • <b>Active Codex:</b> <code>/watchers</code> (or <code>/list</code>) - View and manage active surveillance routes.
 • <b>Watcher Removal:</b> <code>/removetarget &lt;src&gt; &lt;dst&gt;</code> or <code>/removesource &lt;src&gt;</code> (or <code>/unwatch</code>).
 
+<b>🏷️ 4. CUSTOM RE-BRANDING & THUMBNAILS</b>
+• <code>/replace [old] -> [new]</code> - Auto-replace watermarks, links & names in captions.
+• <code>/replace</code> - View and manage your active text replacement rules.
+• <code>/clearreplace</code> - Delete all caption replacement rules.
+• <code>/setthumb</code> - Reply to any photo to set a custom channel thumbnail.
+• <code>/viewthumb</code> - Preview your currently active custom thumbnail.
+• <code>/delthumb</code> - Remove custom thumbnail and revert to default.
+
+<b>📊 5. ANALYTICS & HEALTH DASHBOARD</b>
+• <code>/channelstats</code> (or <code>/stats</code>) - View live deliveries, bandwidth saved, CPU & RAM load.
+• <code>/mywatchers</code> - Quick shortcut to active surveillance routes.
+
 <b>🎛 4. TASK & ENGINE DASHBOARD</b>
 • <code>/tasks</code> (or <code>/progress</code>) - Refresh real-time interactive progress message cards.
 • <code>/cancel</code> - Interactive termination menu for specific or all tasks.
@@ -229,6 +241,103 @@ class Database:
             print("✅ Database indexes verified and initialized.")
         except Exception as e:
             print(f"⚠️ Index initialization notice: {e}")
+
+    async def get_replacements(self, user_id: int):
+        if self.db is None: return []
+        try:
+            doc = await self.db.replacements.find_one({"user_id": int(user_id)})
+            return doc.get("rules", []) if doc else []
+        except Exception:
+            return []
+
+    async def add_replacement(self, user_id: int, find_text: str, replace_text: str):
+        if self.db is None: return False
+        try:
+            rules = await self.get_replacements(user_id)
+            updated = False
+            for r in rules:
+                if r["find"].lower() == find_text.lower():
+                    r["replace"] = replace_text
+                    updated = True
+                    break
+            if not updated:
+                rules.append({"find": find_text, "replace": replace_text})
+            await self.db.replacements.update_one(
+                {"user_id": int(user_id)},
+                {"$set": {"rules": rules, "updated_at": datetime.datetime.now()}},
+                upsert=True
+            )
+            return True
+        except Exception:
+            return False
+
+    async def delete_replacement(self, user_id: int, find_text: str):
+        if self.db is None: return False
+        try:
+            rules = await self.get_replacements(user_id)
+            rules = [r for r in rules if r["find"].lower() != find_text.lower()]
+            await self.db.replacements.update_one(
+                {"user_id": int(user_id)},
+                {"$set": {"rules": rules}},
+                upsert=True
+            )
+            return True
+        except Exception:
+            return False
+
+    async def clear_replacements(self, user_id: int):
+        if self.db is None: return False
+        try:
+            await self.db.replacements.delete_one({"user_id": int(user_id)})
+            return True
+        except Exception:
+            return False
+
+    async def inc_forward_stats(self, user_id: int, is_fast_copy: bool = True, size_bytes: int = 0):
+        if self.db is None or not user_id: return
+        try:
+            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+            update = {
+                "$inc": {
+                    "total_forwards": 1,
+                    f"daily.{today_str}": 1,
+                    "fast_copy_count" if is_fast_copy else "download_count": 1,
+                    "bytes_saved" if is_fast_copy else "bytes_downloaded": int(size_bytes)
+                }
+            }
+            await self.db.stats.update_one({"user_id": int(user_id)}, update, upsert=True)
+        except Exception:
+            pass
+
+    async def get_forward_stats(self, user_id: int):
+        if self.db is None or not user_id: return {}
+        try:
+            doc = await self.db.stats.find_one({"user_id": int(user_id)})
+            return doc or {}
+        except Exception:
+            return {}
+
+    async def set_user_thumb(self, user_id: int, file_id: str):
+        if self.db is None: return
+        try:
+            await self.db.users.update_one({"id": int(user_id)}, {"$set": {"custom_thumb": file_id}}, upsert=True)
+        except Exception:
+            pass
+
+    async def get_user_thumb(self, user_id: int):
+        if self.db is None: return None
+        try:
+            doc = await self.db.users.find_one({"id": int(user_id)}, {"custom_thumb": 1})
+            return doc.get("custom_thumb") if doc else None
+        except Exception:
+            return None
+
+    async def del_user_thumb(self, user_id: int):
+        if self.db is None: return
+        try:
+            await self.db.users.update_one({"id": int(user_id)}, {"$unset": {"custom_thumb": ""}})
+        except Exception:
+            pass
 
     async def get_dl_status(self):
         if self.db is None:
@@ -470,7 +579,26 @@ class Database:
         return await self.db.watchers.find_one(query)
 
     async def get_all_watchers(self):
+        if self.db is None:
+            async def _empty():
+                if False: yield
+            return _empty()
         return self.db.watchers.find({})
+
+    async def get_user_watchers(self, user_id, show_all=False):
+        if self.db is None: return []
+        try:
+            if show_all:
+                cursor = self.db.watchers.find({})
+            else:
+                q_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
+                cursor = self.db.watchers.find(q_filter)
+            watchers = []
+            async for w in cursor:
+                watchers.append(w)
+            return watchers
+        except Exception:
+            return []
 
     async def remove_watcher(self, source_id, user_id=None):
         query = {'source_id': int(source_id)}
@@ -879,7 +1007,59 @@ async def ask_listener(client, message):
 
 BOT_START_TIME = time.time()
 
-ACTIVE_PROCESSES = defaultdict(dict)  
+ACTIVE_PROCESSES = defaultdict(dict)
+
+# --- RE-BRANDING ENGINE CACHE & LOGIC ---
+USER_REPLACEMENTS = {}
+
+async def get_user_replacements(user_id: int):
+    if not user_id:
+        return []
+    uid = int(user_id)
+    if uid in USER_REPLACEMENTS:
+        return USER_REPLACEMENTS[uid]
+    rules = await db.get_replacements(uid)
+    USER_REPLACEMENTS[uid] = rules
+    return rules
+
+async def apply_user_replacements(text: str, user_id: int) -> str:
+    if not text or not user_id:
+        return text
+    uid = int(user_id)
+    rules = USER_REPLACEMENTS.get(uid)
+    if rules is None:
+        rules = await db.get_replacements(uid)
+        USER_REPLACEMENTS[uid] = rules
+    if not rules:
+        return text
+    for rule in rules:
+        f_str = rule.get("find", "").strip()
+        r_str = rule.get("replace", "")
+        if f_str:
+            try:
+                pattern = re.compile(re.escape(f_str), re.IGNORECASE)
+                text = pattern.sub(r_str, text)
+            except Exception:
+                text = text.replace(f_str, r_str)
+    return text
+
+async def get_or_download_user_thumb(user_id: int, client: Client):
+    if not user_id:
+        return None
+    thumb_path = Path(f"./thumbnails/{user_id}.jpg")
+    if thumb_path.exists():
+        return str(thumb_path)
+    file_id = await db.get_user_thumb(user_id)
+    if file_id:
+        try:
+            Path("./thumbnails").mkdir(parents=True, exist_ok=True)
+            downloaded = await client.download_media(file_id, file_name=str(thumb_path))
+            if downloaded and os.path.exists(downloaded):
+                return str(thumb_path)
+        except Exception:
+            pass
+    return None
+  
 CANCEL_FLAGS = {}  
 
 batch_temp = type("BT", (), {})()
@@ -1906,11 +2086,8 @@ async def watchers_page_callback(client: Client, query: CallbackQuery):
     page = int(query.matches[0].group(1))
     is_admin_flag = bool(int(query.matches[0].group(2) or 0))
 
-    if is_admin_flag and is_admin(user_id):
-        user_watchers = await db.db.watchers.find({}).to_list(length=None)
-    else:
-        q_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
-        user_watchers = await db.db.watchers.find(q_filter).to_list(length=None)
+    show_all = is_admin_flag and is_admin(user_id)
+    user_watchers = await db.get_user_watchers(user_id, show_all=show_all)
 
     if not user_watchers:
         empty_kb = InlineKeyboardMarkup([
@@ -2753,10 +2930,7 @@ async def list_watchers(client, message):
         show_all = False
         if len(message.command) > 1 and message.command[1].lower() == "all" and is_admin(user_id):
             show_all = True
-            user_watchers = await db.db.watchers.find({}).to_list(length=None)
-        else:
-            q_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
-            user_watchers = await db.db.watchers.find(q_filter).to_list(length=None)
+        user_watchers = await db.get_user_watchers(user_id, show_all=show_all)
 
         if not user_watchers:
             empty_kb = InlineKeyboardMarkup([
@@ -4993,6 +5167,7 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
 
     if msg_type != "Text":
         clean_caption = append_media_footer(clean_caption, media_file_size)
+    clean_caption = await apply_user_replacements(clean_caption, user_id)
 
     # 🚀 EXACT TEXT MESSAGE CLONE WITH NEW CAPTION
     if "Text" == msg_type:
@@ -5154,7 +5329,11 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                     if msg_fresh.document and msg_fresh.document.thumbs: thumb = msg_fresh.document.thumbs[0]
                     elif msg_fresh.video and msg_fresh.video.thumbs: thumb = msg_fresh.video.thumbs[0]
                     elif msg_fresh.audio and msg_fresh.audio.thumbs: thumb = msg_fresh.audio.thumbs[0]
-                    if thumb: ph_path = await acc.download_media(thumb.file_id, file_name=str(task_folder_path / "thumb.jpg"))
+                    custom_user_thumb = await get_or_download_user_thumb(user_id, client)
+                    if custom_user_thumb and os.path.exists(custom_user_thumb):
+                        ph_path = custom_user_thumb
+                    elif thumb:
+                        ph_path = await acc.download_media(thumb.file_id, file_name=str(task_folder_path / "thumb.jpg"))
                 except Exception: pass
 
                 download_success = True
@@ -5263,6 +5442,403 @@ from pyrogram.handlers import MessageHandler
 
 WATCHER_LOCKS = {} 
 
+
+# ==============================================================================
+# --- FEATURE 1: CUSTOM RE-BRANDING & REPLACEMENT ENGINE (/replace) ---
+# ==============================================================================
+
+@app.on_message(filters.command(["replace", "rebrand", "replacements"]) & filters.private & ~filters.bot)
+async def replace_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ Access Denied: You are not authorized.", quote=True)
+
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1:
+        raw_text = args[1].strip()
+        sep = None
+        for s in ["->", "=>", "➜", "|"]:
+            if s in raw_text:
+                sep = s
+                break
+        
+        if not sep:
+            return await message.reply(
+                "⚠️ <b>Invalid Syntax!</b>\n\n"
+                "Use <code>-></code> to separate the target and replacement words.\n\n"
+                "<b>Examples:</b>\n"
+                "• <code>/replace @OldChannel -> @NewChannel</code>\n"
+                "• <code>/replace https://t.me/old -> https://t.me/new</code>\n"
+                "• <code>/replace [OldBranding] -> [MyBranding]</code>",
+                quote=True
+            )
+
+        parts = raw_text.split(sep, 1)
+        find_str = parts[0].strip()
+        replace_str = parts[1].strip()
+
+        if not find_str:
+            return await message.reply("⚠️ The text to find cannot be empty!", quote=True)
+
+        await db.add_replacement(user_id, find_str, replace_str)
+        USER_REPLACEMENTS[int(user_id)] = await db.get_replacements(user_id)
+
+        return await message.reply(
+            "✅ <b>Re-Branding Rule Saved!</b>\n\n"
+            f"🔍 <b>Find:</b> <code>{html.escape(find_str)}</code>\n"
+            f"🎯 <b>Replace With:</b> <code>{html.escape(replace_str)}</code>\n\n"
+            "💡 <i>All matching text/links in forwarded captions will now be automatically replaced!</i>",
+            quote=True
+        )
+
+    rules = await db.get_replacements(user_id)
+    USER_REPLACEMENTS[int(user_id)] = rules
+    
+    if not rules:
+        return await message.reply(
+            "🏷️ <b>Custom Word & Link Re-Branding Engine</b>\n\n"
+            "You have no replacement rules saved yet.\n\n"
+            "<b>How to add rules:</b>\n"
+            "• <code>/replace @OldChannel -> @MyChannel</code>\n"
+            "• <code>/replace https://t.me/spam -> https://t.me/mychannel</code>\n"
+            "• <code>/replace [OldName] -> [MyBranding]</code>\n\n"
+            "💡 <i>Every post forwarded via Watchers or Downloaded will be automatically re-branded!</i>",
+            quote=True
+        )
+
+    text = (
+        "🏷️ <b>Your Active Re-Branding Rules:</b>\n"
+        f"📊 Total Rules: <code>{len(rules)}</code>\n"
+        "─────────────────────────\n\n"
+    )
+    buttons = []
+    for idx, r in enumerate(rules, 1):
+        f_s = r.get("find", "")
+        r_s = r.get("replace", "")
+        text += f"<b>{idx}.</b> <code>{html.escape(f_s)}</code> ➜ <code>{html.escape(r_s)}</code>\n"
+        if idx <= 6:
+            buttons.append([InlineKeyboardButton(f"🗑️ Delete #{idx} ({f_s[:15]})", callback_data=f"del_rep:{idx-1}")])
+
+    text += "\n─────────────────────────\n"
+    text += "💡 <i>To add:</i> <code>/replace &lt;old&gt; -> &lt;new&gt;</code>\n"
+    text += "🗑 <i>To clear all:</i> <code>/clearreplace</code>"
+
+    buttons.append([InlineKeyboardButton("🗑 Clear All Rules", callback_data="clear_all_rep")])
+    buttons.append([InlineKeyboardButton("❌ Close", callback_data="close_menu")])
+
+    await message.reply(text, reply_markup=InlineKeyboardMarkup(buttons), quote=True)
+
+@app.on_message(filters.command(["clearreplace", "clearreplacements"]) & filters.private & ~filters.bot)
+async def clear_replace_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ Access Denied.", quote=True)
+
+    await db.clear_replacements(user_id)
+    USER_REPLACEMENTS[int(user_id)] = []
+    await message.reply("🗑️ <b>All Re-Branding rules have been cleared!</b>", quote=True)
+
+@app.on_callback_query(filters.regex(r"^del_rep:(\d+)$"))
+async def del_rep_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    idx = int(query.matches[0].group(1))
+    rules = await db.get_replacements(user_id)
+    if 0 <= idx < len(rules):
+        target_rule = rules[idx]
+        await db.delete_replacement(user_id, target_rule["find"])
+        USER_REPLACEMENTS[int(user_id)] = await db.get_replacements(user_id)
+        await query.answer(f"🗑️ Deleted #{idx+1}", show_alert=True)
+    else:
+        await query.answer("Rule already deleted.", show_alert=False)
+    
+    # Refresh menu
+    rules = await db.get_replacements(user_id)
+    if not rules:
+        return await query.message.edit_text("🏷️ <b>Re-Branding Engine:</b> All rules cleared! Use <code>/replace &lt;old&gt; -> &lt;new&gt;</code> to add.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="close_menu")]]))
+    
+    text = f"🏷️ <b>Your Active Re-Branding Rules:</b>\n📊 Total Rules: <code>{len(rules)}</code>\n─────────────────────────\n\n"
+    buttons = []
+    for i, r in enumerate(rules, 1):
+        text += f"<b>{i}.</b> <code>{html.escape(r.get('find',''))}</code> ➜ <code>{html.escape(r.get('replace',''))}</code>\n"
+        if i <= 6:
+            buttons.append([InlineKeyboardButton(f"🗑️ Delete #{i}", callback_data=f"del_rep:{i-1}")])
+    buttons.append([InlineKeyboardButton("🗑 Clear All Rules", callback_data="clear_all_rep")])
+    buttons.append([InlineKeyboardButton("❌ Close", callback_data="close_menu")])
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@app.on_callback_query(filters.regex(r"^clear_all_rep$"))
+async def clear_all_rep_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    await db.clear_replacements(user_id)
+    USER_REPLACEMENTS[int(user_id)] = []
+    await query.answer("All rules cleared!", show_alert=True)
+    await query.message.edit_text("🏷️ <b>Re-Branding Engine:</b> All rules cleared! Use <code>/replace &lt;old&gt; -> &lt;new&gt;</code> to add new rules.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="close_menu")]]))
+
+
+# ==============================================================================
+# --- FEATURE 2: CUSTOM THUMBNAIL INSERTER (/setthumb) ---
+# ==============================================================================
+
+@app.on_message(filters.command(["setthumb", "setthumbnail"]) & filters.private & ~filters.bot)
+async def set_thumb_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ Access Denied.", quote=True)
+
+    photo = None
+    if message.reply_to_message and message.reply_to_message.photo:
+        photo = message.reply_to_message.photo
+    elif message.photo:
+        photo = message.photo
+
+    if not photo:
+        return await message.reply(
+            "🖼️ <b>How to Set Custom Thumbnail:</b>\n\n"
+            "Send or reply to any photo with <code>/setthumb</code> to save your channel's custom thumbnail.\n\n"
+            "• <code>/viewthumb</code> - Preview your active thumbnail\n"
+            "• <code>/delthumb</code> - Remove your thumbnail and revert to default",
+            quote=True
+        )
+
+    status_msg = await message.reply("⏳ <i>Saving custom thumbnail...</i>", quote=True)
+    try:
+        thumb_dir = Path("./thumbnails")
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        thumb_path = thumb_dir / f"{user_id}.jpg"
+        
+        await client.download_media(photo.file_id, file_name=str(thumb_path))
+        await db.set_user_thumb(user_id, photo.file_id)
+        
+        await status_msg.edit(
+            "✅ <b>Custom Thumbnail Saved Successfully!</b>\n\n"
+            "🖼️ This image will now automatically be attached as the cover thumbnail for all your uploaded videos and documents.\n\n"
+            "Use <code>/viewthumb</code> to view or <code>/delthumb</code> to delete.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👀 View Thumbnail", callback_data="view_thumb_act")],
+                [InlineKeyboardButton("🗑 Delete Thumbnail", callback_data="del_thumb_act")]
+            ])
+        )
+    except Exception as e:
+        await status_msg.edit(f"❌ <b>Failed to save thumbnail:</b> <code>{e}</code>")
+
+@app.on_message(filters.command(["viewthumb", "mythumb", "thumbnail"]) & filters.private & ~filters.bot)
+async def view_thumb_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ Access Denied.", quote=True)
+
+    thumb_file = await get_or_download_user_thumb(user_id, client)
+    if not thumb_file or not os.path.exists(thumb_file):
+        return await message.reply(
+            "⚠️ <b>No Custom Thumbnail Found</b>\n\n"
+            "You haven't set a custom thumbnail yet.\n"
+            "Reply to any image with <code>/setthumb</code> to save one!",
+            quote=True
+        )
+
+    try:
+        await client.send_photo(
+            chat_id=message.chat.id,
+            photo=str(thumb_file),
+            caption=(
+                "🖼️ <b>Your Active Custom Thumbnail</b>\n\n"
+                "This thumbnail is automatically attached to all your uploaded videos and files.\n\n"
+                "Use <code>/delthumb</code> if you want to delete it."
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑 Delete Thumbnail", callback_data="del_thumb_act")],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
+            ])
+        )
+    except Exception as e:
+        await message.reply(f"❌ Could not send thumbnail: {e}")
+
+@app.on_message(filters.command(["delthumb", "clearthumb", "deletethumb"]) & filters.private & ~filters.bot)
+async def del_thumb_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ Access Denied.", quote=True)
+
+    thumb_path = Path(f"./thumbnails/{user_id}.jpg")
+    deleted = False
+    if thumb_path.exists():
+        try:
+            thumb_path.unlink()
+            deleted = True
+        except Exception:
+            pass
+    await db.del_user_thumb(user_id)
+    
+    if deleted:
+        await message.reply("🗑️ <b>Custom Thumbnail Deleted!</b>\n\nReverted back to default media thumbnails.", quote=True)
+    else:
+        await message.reply("⚠️ You didn't have any custom thumbnail saved.", quote=True)
+
+@app.on_callback_query(filters.regex(r"^del_thumb_act$"))
+async def del_thumb_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    thumb_path = Path(f"./thumbnails/{user_id}.jpg")
+    if thumb_path.exists():
+        try: thumb_path.unlink()
+        except Exception: pass
+    await db.del_user_thumb(user_id)
+    await query.answer("Thumbnail deleted!", show_alert=True)
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+@app.on_callback_query(filters.regex(r"^view_thumb_act$"))
+async def view_thumb_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    thumb_file = await get_or_download_user_thumb(user_id, client)
+    if not thumb_file or not os.path.exists(thumb_file):
+        return await query.answer("No custom thumbnail saved yet.", show_alert=True)
+    await query.answer()
+    try:
+        await client.send_photo(
+            chat_id=query.message.chat.id,
+            photo=str(thumb_file),
+            caption="🖼️ <b>Your Active Custom Thumbnail</b>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Delete Thumbnail", callback_data="del_thumb_act")]])
+        )
+    except Exception as e:
+        await query.answer(f"Error: {e}", show_alert=True)
+
+
+# ==============================================================================
+# --- FEATURE 10: ANALYTICS & HEALTH DASHBOARD (/channelstats & /mywatchers) ---
+# ==============================================================================
+
+async def build_channel_stats_ui(user_id: int, user_first_name: str = "User"):
+    cpu_pct = psutil.cpu_percent()
+    mem = psutil.virtual_memory()
+    used_mb = int((mem.total - mem.available) / (1024 * 1024))
+    total_mb = int(mem.total / (1024 * 1024))
+    mem_percent = mem.percent
+
+    uptime_seconds = int(time.time() - BOT_START_TIME)
+    uptime_str = get_readable_time(uptime_seconds)
+
+    user_watchers = await db.get_user_watchers(user_id)
+    watchers_count = len(user_watchers)
+    total_targets = sum(len(w.get("targets", [])) for w in user_watchers)
+
+    saved_sources = await db.get_saved_channels(user_id, channel_type="source")
+    saved_dests = await db.get_saved_channels(user_id, channel_type="dest")
+    sources_count = len(saved_sources)
+    dests_count = len(saved_dests)
+
+    rules = await db.get_replacements(user_id)
+    rules_count = len(rules)
+
+    file_id = await db.get_user_thumb(user_id)
+    local_thumb = Path(f"./thumbnails/{user_id}.jpg").exists()
+    has_thumb = "✅ Active" if (file_id or local_thumb) else "❌ None"
+
+    f_stats = await db.get_forward_stats(user_id)
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    today_forwards = f_stats.get("daily", {}).get(today_str, 0)
+    total_forwards = f_stats.get("total_forwards", 0)
+    fast_copy_count = f_stats.get("fast_copy_count", 0)
+    dl_count = f_stats.get("download_count", 0)
+    total_ops = fast_copy_count + dl_count
+    fast_ratio = round((fast_copy_count / max(1, total_ops)) * 100, 1) if total_ops > 0 else 100.0
+    saved_gb = round((fast_copy_count * 200) / 1024, 2)
+
+    text = (
+        "📊 <b>PERFORMANCE & CHANNEL INTELLIGENCE DASHBOARD</b>\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"👤 <b>Operator:</b> {html.escape(str(user_first_name))} (<code>{user_id}</code>)\n"
+        f"⏱ <b>System Uptime:</b> <code>{uptime_str}</code>\n\n"
+        "🛰️ <b>SURVEILLANCE NETWORK:</b>\n"
+        f"├ 📥 Active Watchers: <b>{watchers_count} channels</b>\n"
+        f"├ 🎯 Target Endpoints: <b>{total_targets} destinations</b>\n"
+        f"├ 📂 Saved Sources: <b>{sources_count}</b> | Destinations: <b>{dests_count}</b>\n"
+        f"├ 🏷️ Re-Branding Rules: <b>{rules_count} active</b>\n"
+        f"└ 🖼️ Custom Thumbnail: <b>{has_thumb}</b>\n\n"
+        "⚡ <b>DELIVERY ENGINE METRICS:</b>\n"
+        f"├ 📅 Today's Deliveries: <b>{today_forwards} posts</b>\n"
+        f"├ 📦 Lifetime Deliveries: <b>{total_forwards} posts</b>\n"
+        f"├ 🚀 Fast-Copy Efficiency: <b>{fast_ratio}%</b> (Tag-Free Copy)\n"
+        f"└ 🛡️ Server Bandwidth Saved: <b>~{saved_gb} GB</b> (Sevalla Friendly)\n\n"
+        "💻 <b>SERVER HARDWARE TELEMETRY:</b>\n"
+        f"├ 🧠 RAM Allocation: <b>{used_mb} MB / {total_mb} MB ({mem_percent}%)</b>\n"
+        f"├ ⚙️ CPU Workload: <b>{cpu_pct}%</b>\n"
+        "└ 🟢 Engine Status: <b>Online & Ultra-Fast</b>\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="refresh_stats_ui"),
+            InlineKeyboardButton("🛰️ View Watchers", callback_data="watchers_pg:0:0")
+        ],
+        [
+            InlineKeyboardButton("🏷️ Re-Brand Rules", callback_data="view_rebrand_ui"),
+            InlineKeyboardButton("🖼️ My Thumbnail", callback_data="view_thumb_act")
+        ],
+        [
+            InlineKeyboardButton("❌ Close Dashboard", callback_data="close_menu")
+        ]
+    ])
+
+    return text, markup
+
+@app.on_message(filters.command(["channelstats", "stats", "analytics"]) & filters.private & ~filters.bot)
+async def channel_stats_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ Access Denied.", quote=True)
+
+    text, markup = await build_channel_stats_ui(user_id, message.from_user.first_name)
+    await message.reply(text, reply_markup=markup, quote=True, parse_mode=enums.ParseMode.HTML)
+
+@app.on_message(filters.command(["mywatchers"]) & filters.private & ~filters.bot)
+async def my_watchers_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ Access Denied.", quote=True)
+    await list_watchers(client, message)
+
+@app.on_callback_query(filters.regex(r"^refresh_stats_ui$"))
+async def refresh_stats_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    text, markup = await build_channel_stats_ui(user_id, query.from_user.first_name)
+    try:
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception:
+        pass
+    await query.answer("Dashboard Refreshed ⚡")
+
+@app.on_callback_query(filters.regex(r"^view_rebrand_ui$"))
+async def view_rebrand_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    rules = await db.get_replacements(user_id)
+    if not rules:
+        return await query.answer("No rules yet! Use /replace <old> -> <new>", show_alert=True)
+    await query.answer()
+    text = f"🏷️ <b>Your Active Re-Branding Rules:</b>\n📊 Total Rules: <code>{len(rules)}</code>\n─────────────────────────\n\n"
+    buttons = []
+    for i, r in enumerate(rules, 1):
+        text += f"<b>{i}.</b> <code>{html.escape(r.get('find',''))}</code> ➜ <code>{html.escape(r.get('replace',''))}</code>\n"
+        if i <= 5:
+            buttons.append([InlineKeyboardButton(f"🗑️ Delete #{i}", callback_data=f"del_rep:{i-1}")])
+    buttons.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="refresh_stats_ui")])
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
 async def process_watcher_message(client, message):
     chat_id = message.chat.id
     topic_id = getattr(message, "message_thread_id", None)
@@ -5316,6 +5892,7 @@ async def process_watcher_message(client, message):
                     if "Mono" in text_format: clean_caption = f"<code>{clean_caption}</code>"
                     if "Italic" in text_format: clean_caption = f"<i>{clean_caption}</i>"
                     if "Bold" in text_format: clean_caption = f"<b>{clean_caption}</b>"
+                clean_caption = await apply_user_replacements(clean_caption, owner_id)
                 for t in targets:
                     dest_chat = t['dest_id']
                     dest_th = t.get('dest_thread')
@@ -5384,6 +5961,7 @@ async def process_watcher_message(client, message):
                 if "Bold" in text_format: clean_caption = f"<b>{clean_caption}</b>"
 
             clean_caption = append_media_footer(clean_caption, media_file_size)
+            clean_caption = await apply_user_replacements(clean_caption, owner_id)
 
             original_filename = "unknown_file"
             if getattr(message, "document", None) and getattr(message.document, "file_name", None): original_filename = message.document.file_name
@@ -5432,6 +6010,7 @@ async def process_watcher_message(client, message):
                                 fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
                                 await client.copy_message(chat_id=dest_id, from_chat_id=chat_id, message_id=message.id, reply_to_message_id=dest_thread, caption=fallback_cap, reply_markup=None)
                                 success = True
+                                await db.inc_forward_stats(owner_id, is_fast_copy=True, size_bytes=media_file_size)
                                 continue
                             except Exception: pass
 
@@ -5450,6 +6029,7 @@ async def process_watcher_message(client, message):
                                     )
                                 )
                                 success = True
+                                await db.inc_forward_stats(owner_id, is_fast_copy=True, size_bytes=media_file_size)
                                 if clean_caption and hasattr(r, "updates"):
                                     try:
                                         new_msg_id = None
@@ -5585,7 +6165,13 @@ async def register_bot_commands(bot_client: Client) -> bool:
             BotCommand("tasks", "📊 View live task progress"),
             BotCommand("toggledl", "🔛 Turn Auto-Download ON/OFF"),
             BotCommand("pixel", "✨ Bypass Pixeldrain Links"),
-            BotCommand("cancel", "❌ Cancel Your Any Ongoing Task")
+            BotCommand("cancel", "❌ Cancel Your Any Ongoing Task"),
+            BotCommand("replace", "🏷️ Re-Brand Captions & Links"),
+            BotCommand("setthumb", "🖼️ Set Custom Media Thumbnail"),
+            BotCommand("viewthumb", "👀 View Saved Thumbnail"),
+            BotCommand("delthumb", "🗑️ Delete Custom Thumbnail"),
+            BotCommand("channelstats", "📊 Live Stats & Telemetry"),
+            BotCommand("mywatchers", "👀 Quick View Active Watchers")
         ]
 
         admin_commands = public_commands + [
