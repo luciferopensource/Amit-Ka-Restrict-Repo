@@ -23,7 +23,7 @@ import urllib.parse
 from pathlib import Path
 from collections import defaultdict
 import motor.motor_asyncio
-from pyrogram import Client, filters, enums, idle
+from pyrogram import Client, filters, enums, idle, raw
 from pyrogram.errors import (
     FloodWait, UserIsBlocked, InputUserDeactivated, UserAlreadyParticipant,
     InviteHashExpired, UsernameNotOccupied, FileReferenceExpired, UserNotParticipant,
@@ -5083,16 +5083,16 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                     continue
                 except Exception: pass
                 try:
-                    await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup)
+                    await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                     forward_success = True
                 except FloodWait as e:
                     await asyncio.sleep(e.value + 5)
-                    await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup)
+                    await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                     forward_success = True
                 except Exception as e2:
                     try:
                         fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
-                        await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=msg.reply_markup)
+                        await acc.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=None)
                         forward_success = True
                     except Exception:
                         print(f"Task Fast-Copy blocked: {e2}")
@@ -5341,20 +5341,36 @@ async def process_watcher_message(client, message):
                     if "Italic" in text_format: clean_caption = f"<i>{clean_caption}</i>"
                     if "Bold" in text_format: clean_caption = f"<b>{clean_caption}</b>"
                 for t in targets:
+                    dest_chat = t['dest_id']
+                    dest_th = t.get('dest_thread')
+                    sent = False
                     try: 
-                        await client.send_message(
-                            chat_id=t['dest_id'], 
+                        await app.send_message(
+                            chat_id=dest_chat, 
                             text=clean_caption,
                             reply_markup=message.reply_markup,
-                            reply_to_message_id=t.get('dest_thread'),
+                            reply_to_message_id=dest_th,
                             parse_mode=enums.ParseMode.HTML,
                             disable_web_page_preview=True
                         )
-                    except Exception as e_text:
-                        if "TOO_LONG" in str(e_text):
-                            clean_caption = re.sub(r'<[^>]+>', '', clean_caption)[:4000]
-                            try: await client.send_message(chat_id=t['dest_id'], text=clean_caption, reply_markup=message.reply_markup, reply_to_message_id=t.get('dest_thread'), disable_web_page_preview=True)
-                            except Exception: pass
+                        sent = True
+                    except Exception:
+                        pass
+                    if not sent:
+                        try:
+                            await client.send_message(
+                                chat_id=dest_chat, 
+                                text=clean_caption,
+                                reply_markup=None,
+                                reply_to_message_id=dest_th,
+                                parse_mode=enums.ParseMode.HTML,
+                                disable_web_page_preview=True
+                            )
+                        except Exception as e_text:
+                            if "TOO_LONG" in str(e_text):
+                                clean_caption_short = re.sub(r'<[^>]+>', '', clean_caption)[:4000]
+                                try: await client.send_message(chat_id=dest_chat, text=clean_caption_short, reply_markup=None, reply_to_message_id=dest_th, disable_web_page_preview=True)
+                                except Exception: pass
                 return
 
             original_caption = ""
@@ -5414,14 +5430,15 @@ async def process_watcher_message(client, message):
                         pass
                     dest_thread = t.get('dest_thread')
                     
-                    # 🚀 EXACT MEDIA WATCHER FAST FORWARD CLONE
+                    # 🚀 FAST FORWARD CLONE WITHOUT FORWARDING TAG
+                    # 1. Try bot copy_message (Bot API copyMessage creates a 100% clean copy without forward tag)
                     try: 
-                        await app.copy_message(chat_id=dest_id, from_chat_id=safe_source_id, message_id=message.id, reply_to_message_id=dest_thread, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=message.reply_markup)
+                        await app.copy_message(chat_id=dest_id, from_chat_id=safe_source_id, message_id=message.id, reply_to_message_id=dest_thread, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                         success = True
                     except Exception as e1:
                         try:
                             fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
-                            await app.copy_message(chat_id=dest_id, from_chat_id=safe_source_id, message_id=message.id, reply_to_message_id=dest_thread, caption=fallback_cap, reply_markup=message.reply_markup)
+                            await app.copy_message(chat_id=dest_id, from_chat_id=safe_source_id, message_id=message.id, reply_to_message_id=dest_thread, caption=fallback_cap, reply_markup=None)
                             success = True
                             continue
                         except Exception: pass
@@ -5430,22 +5447,61 @@ async def process_watcher_message(client, message):
                         except Exception:
                             pass
 
+                        # 2. Try user client copy_message (reply_markup must be None for user accounts)
                         try: 
-                            await client.copy_message(chat_id=dest_id, from_chat_id=chat_id, message_id=message.id, reply_to_message_id=dest_thread, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=message.reply_markup)
+                            await client.copy_message(chat_id=dest_id, from_chat_id=chat_id, message_id=message.id, reply_to_message_id=dest_thread, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                             success = True
                         except Exception as e2:
                             try:
                                 fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
-                                await client.copy_message(chat_id=dest_id, from_chat_id=chat_id, message_id=message.id, reply_to_message_id=dest_thread, caption=fallback_cap, reply_markup=message.reply_markup)
+                                await client.copy_message(chat_id=dest_id, from_chat_id=chat_id, message_id=message.id, reply_to_message_id=dest_thread, caption=fallback_cap, reply_markup=None)
                                 success = True
                                 continue
                             except Exception: pass
-                            try:
-                                await client.forward_messages(chat_id=dest_id, from_chat_id=chat_id, message_ids=message.id, message_thread_id=dest_thread)
-                                success = True
-                            except Exception as e3:
 
-                                await send_log(f"❌ **Fast-Copy Failed!**\nSource: `{chat_id}`\nDest: `{dest_id}`\nError: `{e3}`")
+                            # 3. Try MTProto ForwardMessages with drop_author=True (Zero Forward Header)
+                            try:
+                                to_peer = await client.resolve_peer(dest_id)
+                                from_peer = await client.resolve_peer(chat_id)
+                                r = await client.invoke(
+                                    raw.functions.messages.ForwardMessages(
+                                        to_peer=to_peer,
+                                        from_peer=from_peer,
+                                        id=[message.id],
+                                        random_id=[client.rnd_id()],
+                                        drop_author=True,
+                                        top_msg_id=dest_thread or None
+                                    )
+                                )
+                                success = True
+                                if clean_caption and hasattr(r, "updates"):
+                                    try:
+                                        new_msg_id = None
+                                        for upd in r.updates:
+                                            if isinstance(upd, (raw.types.UpdateNewMessage, raw.types.UpdateNewChannelMessage)):
+                                                new_msg_id = upd.message.id
+                                                break
+                                        if new_msg_id:
+                                            try:
+                                                await client.edit_message_caption(
+                                                    chat_id=dest_id,
+                                                    message_id=new_msg_id,
+                                                    caption=clean_caption,
+                                                    parse_mode=enums.ParseMode.HTML
+                                                )
+                                            except Exception:
+                                                fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
+                                                await client.edit_message_caption(
+                                                    chat_id=dest_id,
+                                                    message_id=new_msg_id,
+                                                    caption=fallback_cap
+                                                )
+                                    except Exception:
+                                        pass
+                            except Exception as e3:
+                                # DO NOT forward with author tag!
+                                # Let success remain False so Mode B (clean download & re-upload) executes!
+                                pass
                     
                     if not success:
                         fallback_to_download = True
@@ -5486,6 +5542,12 @@ async def process_watcher_message(client, message):
                 "started": time.time()
             }
 
+            dummy_status = None
+            try:
+                dummy_status = await app.send_message(owner_id, f"⏳ **Watcher processing ID `{message.id}` from `{source_name}`...**")
+            except Exception:
+                dummy_status = None
+
             try:
                 await handle_private(
                     client=app,
@@ -5508,8 +5570,11 @@ async def process_watcher_message(client, message):
                 if task_uuid in ACTIVE_PROCESSES.get(owner_id, {}):
                     del ACTIVE_PROCESSES[owner_id][task_uuid]
                 CANCEL_FLAGS.pop(task_uuid, None)
-                
-            await dummy_status.delete()
+                if dummy_status:
+                    try:
+                        await dummy_status.delete()
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"❌ [DEBUG WATCHER] Watcher Mode B Fail: {e}")
             
