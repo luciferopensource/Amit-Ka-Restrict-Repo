@@ -177,8 +177,10 @@ HELP_TXT = """<b>📚 BOT'S USAGE GUIDE</b>
 • <code>/watchers</code> (or <code>/list</code>) - View active watchers & filters.
 • <code>/removetarget</code> - Remove a specific destination.
 • <code>/removesource</code> (or <code>/unwatch</code>) - Stop watching a source.
-• <code>/addchannel</code> (or <code>/savechannel</code>) - Add & save destination channel to memory.
-• <code>/viewsavedchannels</code> (or <code>/savedchannels</code>) - View, select & delete saved channels (10 per page).
+• <code>/addsourcechannel</code> (or <code>/addsource</code>) - Add & save source channel to memory (for watching/forwarding).
+• <code>/adddestinationchannel</code> (or <code>/adddest</code>) - Add & save destination channel to memory (10 buttons per page).
+• <code>/viewsourcechannels</code> (or <code>/viewsources</code>) - View, watch & delete saved source channels.
+• <code>/viewdestinationchannels</code> (or <code>/viewdest</code>) - View, inspect & delete saved destination channels.
 • <code>/setcommands</code> - Sync and refresh Telegram menu commands.
 • <code>/tasks</code> - Delete old progress and reload live progress pop-up.
 • <code>/toggledl</code> - Turn ON/OFF Background Downloading.
@@ -208,8 +210,14 @@ class Database:
             await self.col.create_index("id", unique=True)
             await self.db.watchers.create_index([("source_id", 1), ("source_thread", 1)])
             await self.db.sync_progress.create_index([("user_id", 1), ("source_id", 1), ("dest_id", 1)])
-            await self.db.saved_channels.create_index([("user_id", 1), ("last_used", -1)])
-            await self.db.saved_channels.create_index([("user_id", 1), ("channel_id", 1), ("thread_id", 1)], unique=True)
+            await self.db.saved_channels.create_index([("user_id", 1), ("channel_type", 1), ("last_used", -1)])
+            try:
+                indexes = await self.db.saved_channels.index_information()
+                if "user_id_1_channel_id_1_thread_id_1" in indexes:
+                    await self.db.saved_channels.drop_index("user_id_1_channel_id_1_thread_id_1")
+            except Exception:
+                pass
+            await self.db.saved_channels.create_index([("user_id", 1), ("channel_id", 1), ("channel_type", 1), ("thread_id", 1)], unique=True)
             print("✅ Database indexes verified and initialized.")
         except Exception as e:
             print(f"⚠️ Index initialization notice: {e}")
@@ -238,15 +246,17 @@ class Database:
         if self.db is None:
             return
         try:
+            ch_type = str(channel_type or "dest").lower()
             query = {
                 "user_id": int(user_id),
                 "channel_id": int(channel_id) if str(channel_id).lstrip('-').isdigit() else str(channel_id),
+                "channel_type": ch_type,
                 "thread_id": int(thread_id) if thread_id else None
             }
             update_data = {
                 "$set": {
                     "channel_title": str(channel_title),
-                    "channel_type": str(channel_type),
+                    "channel_type": ch_type,
                     "last_used": datetime.datetime.now()
                 },
                 "$inc": {"use_count": 1}
@@ -259,7 +269,14 @@ class Database:
         if self.db is None:
             return []
         try:
-            cursor = self.db.saved_channels.find({"user_id": int(user_id)}).sort("last_used", -1)
+            q = {"user_id": int(user_id)}
+            if channel_type and channel_type != "all":
+                ch_type = str(channel_type).lower()
+                if ch_type == "dest":
+                    q["channel_type"] = {"$in": ["dest", None]}
+                else:
+                    q["channel_type"] = ch_type
+            cursor = self.db.saved_channels.find(q).sort("last_used", -1)
             channels = []
             async for ch in cursor:
                 channels.append(ch)
@@ -268,7 +285,7 @@ class Database:
             print(f"Error fetching saved channels: {e}")
             return []
 
-    async def get_saved_channel(self, user_id: int, channel_id, thread_id=None):
+    async def get_saved_channel(self, user_id: int, channel_id, thread_id=None, channel_type: str = "dest"):
         if self.db is None:
             return None
         try:
@@ -277,12 +294,18 @@ class Database:
                 "channel_id": int(channel_id) if str(channel_id).lstrip('-').isdigit() else str(channel_id),
                 "thread_id": int(thread_id) if thread_id else None
             }
+            if channel_type and channel_type != "all":
+                ch_type = str(channel_type).lower()
+                if ch_type == "dest":
+                    query["channel_type"] = {"$in": ["dest", None]}
+                else:
+                    query["channel_type"] = ch_type
             return await self.db.saved_channels.find_one(query)
         except Exception as e:
             print(f"Error fetching single saved channel: {e}")
             return None
 
-    async def delete_saved_channel(self, user_id: int, channel_id, thread_id=None):
+    async def delete_saved_channel(self, user_id: int, channel_id, thread_id=None, channel_type: str = "dest"):
         if self.db is None:
             return False
         try:
@@ -291,6 +314,12 @@ class Database:
                 "channel_id": int(channel_id) if str(channel_id).lstrip('-').isdigit() else str(channel_id),
                 "thread_id": int(thread_id) if thread_id else None
             }
+            if channel_type and channel_type != "all":
+                ch_type = str(channel_type).lower()
+                if ch_type == "dest":
+                    query["channel_type"] = {"$in": ["dest", None]}
+                else:
+                    query["channel_type"] = ch_type
             res = await self.db.saved_channels.delete_one(query)
             return res.deleted_count > 0
         except Exception as e:
@@ -2385,7 +2414,27 @@ async def watch_setup(client: Client, message: Message):
         return await message.reply('⛔ <b>Access Denied:</b> You are not authorized to use this bot.', quote=True)
     
     if len(message.command) < 2:
-        return await message.reply("**Usage:**\n`/watch https://t.me/channel/123`\n(Supports Topics too!)")
+        saved_sources = await db.get_saved_channels(user_id, channel_type="source")
+        if saved_sources:
+            PENDING_TASKS[user_id] = {
+                "mode": "WATCHER",
+                "status": "waiting_source_select"
+            }
+            text, markup = build_channel_memory_ui(saved_sources, page=1, mode="watch_select", channel_type="source")
+            return await message.reply(text, reply_markup=markup, quote=True)
+        else:
+            empty_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Add Source Channel", callback_data="prompt_add_source")],
+                [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+            ])
+            return await message.reply(
+                "👀 <b>REAL-TIME AUTO-FORWARD WATCHER SETUP</b>\n\n"
+                "<b>Usage:</b> <code>/watch https://t.me/channel/123</code>\n"
+                "<i>(Supports Topics too: <code>/watch https://t.me/c/123/45</code>)</i>\n\n"
+                "💡 <b>Save Frequent Sources:</b> Use <code>/addsourcechannel</code> to store your favourite source channels so you can start watching them with 1 tap!",
+                reply_markup=empty_kb,
+                quote=True
+            )
     
     link_text = message.command[1]
     
@@ -2411,6 +2460,29 @@ async def watch_setup(client: Client, message: Message):
         "is_restricted": is_restricted,
         "status": "waiting_choice"
     }
+    # Auto-save source channel in background
+    try:
+        clean_text_s = link_text.replace("https://", "").replace("http://", "").replace("t.me/", "").replace("c/", "")
+        clean_text_s = clean_text_s.split("-")[0].strip()
+        parts_s = clean_text_s.split("/")
+        cid_s = None
+        if "t.me/c/" in link_text or link_text.startswith("c/"):
+            cid_s = int("-100" + parts_s[0])
+        elif parts_s[0].isdigit():
+            cid_s = int("-100" + parts_s[0])
+        else:
+            cid_s = parts_s[0].lstrip("@")
+        if cid_s:
+            asyncio.create_task(db.save_channel(
+                user_id=user_id,
+                channel_id=cid_s,
+                channel_title=f"Chat {cid_s}",
+                channel_type="source",
+                thread_id=source_thread_id
+            ))
+            asyncio.create_task(auto_resolve_channel_title(client, user_id, cid_s, channel_type="source"))
+    except Exception:
+        pass
     
     buttons = [
         [InlineKeyboardButton("📂 Send to DM (Here)", callback_data="dest_dm")],
@@ -2537,7 +2609,7 @@ async def unwatch_callback(client, query):
 # --- CORE: receive links / start tasks / processing / cancel checks ---
 # ==============================================================================
 
-@app.on_message((filters.text | filters.caption) & filters.private & ~filters.command(["dl", "start", "help", "cancel", "botstats", "login", "logout", "broadcast", "status", "watch", "unwatch", "watchers", "removetarget", "removesource", "log", "tasks", "progress", "toggledl", "addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel", "viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels", "setcommands", "sync_commands"]))
+@app.on_message((filters.text | filters.caption) & filters.private & ~filters.command(["dl", "start", "help", "cancel", "botstats", "login", "logout", "broadcast", "status", "watch", "unwatch", "watchers", "removetarget", "removesource", "log", "tasks", "progress", "toggledl", "addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel", "viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels", "setcommands", "sync_commands", "addsourcechannel", "addsource", "savesourcechannel", "savesource", "adddestinationchannel", "adddestination", "adddestchannel", "adddest", "savedestchannel", "savedestination", "viewsourcechannels", "viewsources", "viewsource", "sourcechannels", "sources", "viewdestinationchannels", "viewdestchannels", "viewdest", "viewdestination", "destchannels", "destinations"]))
 async def save(client: Client, message: Message):
     user_id = message.from_user.id
     if not is_authorized(user_id):
@@ -2545,8 +2617,14 @@ async def save(client: Client, message: Message):
     if message.text and message.text.startswith("/"):
         return
     if user_id in PENDING_ADD_CHANNEL:
-        prompt_msg_id = PENDING_ADD_CHANNEL.pop(user_id, None)
-        await process_add_channel_submission(client, message, message.text, prompt_msg_id=prompt_msg_id)
+        pending_val = PENDING_ADD_CHANNEL.pop(user_id, None)
+        if isinstance(pending_val, dict):
+            prompt_msg_id = pending_val.get("prompt_msg_id")
+            ch_type = pending_val.get("channel_type", "dest")
+        else:
+            prompt_msg_id = pending_val
+            ch_type = "dest"
+        await process_add_channel_submission(client, message, message.text, prompt_msg_id=prompt_msg_id, channel_type=ch_type)
         return
     if user_id in PENDING_TASKS:
         if PENDING_TASKS[user_id].get("status") == "waiting_id":
@@ -2721,9 +2799,9 @@ def parse_channel_input(raw_text: str):
             
     return chat_id, thread_id, custom_title
 
-async def auto_resolve_channel_title(client: Client, user_id: int, channel_id, current_title: str = None) -> str:
+async def auto_resolve_channel_title(client: Client, user_id: int, channel_id, current_title: str = None, channel_type: str = "dest") -> str:
     clean_title = (current_title or "").strip()
-    if clean_title and not clean_title.startswith("Chat ") and clean_title not in ["Target Chat", "Destination", "Unknown Destination"]:
+    if clean_title and not clean_title.startswith("Chat ") and clean_title not in ["Target Chat", "Destination", "Unknown Destination", "Source"]:
         return clean_title
     resolved = None
     try:
@@ -2740,13 +2818,14 @@ async def auto_resolve_channel_title(client: Client, user_id: int, channel_id, c
                 pass
     if resolved:
         try:
-            await db.save_channel(user_id, channel_id, resolved)
+            await db.save_channel(user_id, channel_id, resolved, channel_type=channel_type)
         except Exception:
             pass
         return resolved
     return current_title or f"Chat {channel_id}"
 
-def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int = 10, mode: str = "select"):
+def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int = 10, mode: str = "select", channel_type: str = "dest"):
+    ch_type = str(channel_type or "dest").lower()
     total_channels = len(saved_channels)
     total_pages = max(1, math.ceil(total_channels / page_size)) if total_channels > 0 else 1
     
@@ -2759,11 +2838,15 @@ def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int 
     
     buttons = []
     
-    if mode == "delete":
+    is_source = (ch_type == "source")
+    type_label = "SOURCE" if is_source else "DESTINATION"
+    type_icon = "📥" if is_source else "📤"
+    
+    if mode in ["delete", "source_delete", "dest_delete"]:
         header_text = (
-            f"🗑️ <b>MANAGE / DELETE SAVED CHANNELS (Page {page}/{total_pages})</b>\n"
+            f"🗑️ <b>MANAGE / DELETE SAVED {type_label} CHANNELS (Page {page}/{total_pages})</b>\n"
             "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            "<i>Click on any channel below to directly remove it from memory:</i>\n"
+            f"<i>Click on any {type_label.lower()} channel below to directly remove it from memory:</i>\n"
         )
         for i, ch in enumerate(page_channels, start=start_idx + 1):
             ch_id = ch["channel_id"]
@@ -2771,14 +2854,14 @@ def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int 
             title = ch.get("channel_title") or f"Chat {ch_id}"
             emoji = ch.get("emoji") or get_channel_emoji(i, title)
             btn_text = f"❌ Remove: {emoji} {title[:20]}"
-            callback_data = f"ch_del:{ch_id}:{thread_id}:{page}"
+            callback_data = f"ch_del:{ch_id}:{thread_id}:{page}:{ch_type}"
             buttons.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
-    elif mode == "view":
+    elif mode in ["view", "source_view", "dest_view"]:
         header_text = (
-            f"📑 <b>SAVED DESTINATION CHANNELS (Page {page}/{total_pages})</b>\n"
+            f"{type_icon} <b>SAVED {type_label} CHANNELS (Page {page}/{total_pages})</b>\n"
             "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            f"📊 <b>Total Channels in Memory:</b> <code>{total_channels}</code>\n\n"
-            "<i>Click on any channel below to view details or delete it:</i>\n"
+            f"📊 <b>Total {type_label.capitalize()} Channels in Memory:</b> <code>{total_channels}</code>\n\n"
+            f"<i>Click on any {type_label.lower()} channel below to view details, delete it, or manage settings:</i>\n"
         )
         for i, ch in enumerate(page_channels, start=start_idx + 1):
             ch_id = ch["channel_id"]
@@ -2786,13 +2869,27 @@ def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int 
             title = ch.get("channel_title") or f"Chat {ch_id}"
             emoji = ch.get("emoji") or get_channel_emoji(i, title)
             btn_text = f"{emoji} {i}. {title[:22]}"
-            callback_data = f"ch_inspect:{ch_id}:{thread_id}:{page}"
+            callback_data = f"ch_inspect:{ch_id}:{thread_id}:{page}:{ch_type}"
             buttons.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
-    else:
+    elif mode == "watch_select":
+        header_text = (
+            f"👀 <b>SELECT SAVED SOURCE CHANNEL TO WATCH (Page {page}/{total_pages})</b>\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            "<i>Click on any saved source channel below to immediately start real-time forwarding/watching:</i>\n"
+        )
+        for i, ch in enumerate(page_channels, start=start_idx + 1):
+            ch_id = ch["channel_id"]
+            thread_id = ch.get("thread_id") or 0
+            title = ch.get("channel_title") or f"Chat {ch_id}"
+            emoji = ch.get("emoji") or get_channel_emoji(i, title)
+            btn_text = f"👀 {emoji} {i}. {title[:20]}"
+            callback_data = f"ch_watch_sel:{ch_id}:{thread_id}"
+            buttons.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
+    else:  # mode == "select" (quick-select destination during transfer)
         header_text = (
             f"👑 <b>QUICK-SELECT DESTINATION CHANNEL (Page {page}/{total_pages})</b> 👑\n"
             "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            "<i>Select a saved channel from memory below (or enter a new ID/link):</i>\n"
+            "<i>Select a saved destination channel from memory below (or enter a new ID/link):</i>\n"
         )
         for i, ch in enumerate(page_channels, start=start_idx + 1):
             ch_id = ch["channel_id"]
@@ -2807,32 +2904,42 @@ def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int 
     nav_row = []
     if total_pages > 1:
         if page > 1:
-            nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"ch_page:{page-1}:{mode}"))
-        nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data=f"ch_page:{page}:{mode}"))
+            nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"ch_page:{page-1}:{mode}:{ch_type}"))
+        nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data=f"ch_page:{page}:{mode}:{ch_type}"))
         if page < total_pages:
-            nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"ch_page:{page+1}:{mode}"))
+            nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"ch_page:{page+1}:{mode}:{ch_type}"))
         buttons.append(nav_row)
 
     # Bottom management action row
-    if mode == "delete":
+    if mode in ["delete", "source_delete", "dest_delete"]:
         buttons.append([
-            InlineKeyboardButton("🔙 Back to Channel List", callback_data=f"ch_page:{page}:view"),
+            InlineKeyboardButton("🔙 Back to Channel List", callback_data=f"ch_page:{page}:{ch_type}_view:{ch_type}"),
             InlineKeyboardButton("❌ Close", callback_data="ch_close")
         ])
-    elif mode == "view":
-        action_row = [InlineKeyboardButton("➕ Add Channel", callback_data="prompt_add_channel")]
+    elif mode in ["view", "source_view", "dest_view"]:
+        add_btn_text = "➕ Add Source Channel" if is_source else "➕ Add Destination Channel"
+        add_cb = "prompt_add_source" if is_source else "prompt_add_dest"
+        del_cb = f"ch_page:{page}:{ch_type}_delete:{ch_type}"
+        action_row = [InlineKeyboardButton(add_btn_text, callback_data=add_cb)]
         if total_channels > 0:
-            action_row.append(InlineKeyboardButton("🗑️ Bulk Delete Mode", callback_data=f"ch_page:{page}:delete"))
+            action_row.append(InlineKeyboardButton("🗑️ Bulk Delete Mode", callback_data=del_cb))
         buttons.append(action_row)
         buttons.append([InlineKeyboardButton("❌ Close", callback_data="ch_close")])
-    else:
+    elif mode == "watch_select":
+        action_row = [
+            InlineKeyboardButton("➕ Add Source", callback_data="prompt_add_source"),
+            InlineKeyboardButton("✏️ Manual Link", callback_data="watch_manual"),
+            InlineKeyboardButton("🛑 Cancel", callback_data="cancel_setup")
+        ]
+        buttons.append(action_row)
+    else:  # destination select
         action_row = [InlineKeyboardButton("✏️ Enter Other ID/Link", callback_data="ch_manual")]
         if total_channels > 0:
-            action_row.append(InlineKeyboardButton("🗑️ Delete Channels", callback_data=f"ch_page:{page}:delete"))
+            action_row.append(InlineKeyboardButton("🗑️ Delete Channels", callback_data=f"ch_page:{page}:dest_delete:dest"))
         action_row.append(InlineKeyboardButton("🛑 Cancel", callback_data="cancel_setup"))
         buttons.append(action_row)
     
-    footer_text = f"\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💎 <i>Showing {start_idx + 1 if total_channels else 0}–{end_idx} of {total_channels} saved channels • 10/Page</i>"
+    footer_text = f"\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💎 <i>Showing {start_idx + 1 if total_channels else 0}–{end_idx} of {total_channels} saved {type_label.lower()} channels • 10/Page</i>"
     return header_text + footer_text, InlineKeyboardMarkup(buttons)
 
 @app.on_callback_query(filters.regex("^dest_"))
@@ -3166,7 +3273,7 @@ async def channel_memory_select_callback(client: Client, query: CallbackQuery):
     await db.save_channel(user_id, channel_id, title, channel_type="dest", thread_id=thread_id)
     await ask_for_speed(query.message)
 
-@app.on_callback_query(filters.regex(r"^(?:ch_page:(\d+):?(\w+)?|ch_pg:(\d+))"))
+@app.on_callback_query(filters.regex(r"^(?:ch_page:(\d+):?(\w+)?:?(\w+)?|ch_pg:(\d+))"))
 async def channel_memory_page_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     if not is_authorized(user_id):
@@ -3177,12 +3284,14 @@ async def channel_memory_page_callback(client: Client, query: CallbackQuery):
         if match.group(1):
             page = int(match.group(1))
             mode = match.group(2) or "view"
+            ch_type = match.group(3) or ("source" if "source" in mode else "dest")
         else:
-            page = int(match.group(3))
-            mode = "view" 
+            page = int(match.group(4))
+            mode = "view"
+            ch_type = "dest"
         
-        saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
-        text, markup = build_channel_memory_ui(saved_channels, page=page, mode=mode)
+        saved_channels = await db.get_saved_channels(user_id, channel_type=ch_type)
+        text, markup = build_channel_memory_ui(saved_channels, page=page, mode=mode, channel_type=ch_type)
         await query.message.edit_text(text, reply_markup=markup)
         await query.answer(f"Page {page} loaded ⚡")
     except Exception as e:
@@ -3192,7 +3301,7 @@ async def channel_memory_page_callback(client: Client, query: CallbackQuery):
         except Exception:
             pass
 
-@app.on_callback_query(filters.regex(r"^ch_del:(-?\d+):?(\d+)?:?(\d+)?"))
+@app.on_callback_query(filters.regex(r"^ch_del:(-?\d+):?(\d+)?:?(\d+)?:?(\w+)?"))
 async def channel_memory_delete_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     if not is_authorized(user_id):
@@ -3202,19 +3311,124 @@ async def channel_memory_delete_callback(client: Client, query: CallbackQuery):
     channel_id = int(match.group(1))
     thread_id = int(match.group(2)) if match.group(2) and match.group(2) != "0" else None
     page = int(match.group(3)) if match.group(3) else 1
+    ch_type = match.group(4) or "dest"
 
-    deleted = await db.delete_saved_channel(user_id, channel_id, thread_id)
+    ch = await db.get_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type=ch_type)
+    title = ch.get("channel_title") if ch else f"Chat {channel_id}"
+
+    deleted = await db.delete_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type=ch_type)
     if deleted:
-        await query.answer("🗑️ Channel removed from memory!", show_alert=False)
+        await query.answer(f"🗑️ '{title[:25]}' removed from memory!", show_alert=True)
     else:
         await query.answer("Channel was already removed.", show_alert=False)
 
-    saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
-    text, markup = build_channel_memory_ui(saved_channels, page=page, mode="delete")
+    saved_channels = await db.get_saved_channels(user_id, channel_type=ch_type)
+    if not saved_channels:
+        type_lbl = "SOURCE" if ch_type == "source" else "DESTINATION"
+        add_btn = InlineKeyboardButton("➕ Add Source Channel", callback_data="prompt_add_source") if ch_type == "source" else InlineKeyboardButton("➕ Add Destination Channel", callback_data="prompt_add_dest")
+        try:
+            await query.message.edit_text(
+                f"📁 <b>YOUR {type_lbl} CHANNEL MEMORY IS EMPTY</b>\n\nAll saved {type_lbl.lower()} channels have been removed from quick memory.",
+                reply_markup=InlineKeyboardMarkup([[add_btn], [InlineKeyboardButton("❌ Close", callback_data="ch_close")]])
+            )
+        except Exception:
+            pass
+        return
+
+    total_pages = max(1, math.ceil(len(saved_channels) / 10))
+    if page > total_pages: page = total_pages
+    text, markup = build_channel_memory_ui(saved_channels, page=page, mode="delete", channel_type=ch_type)
     try:
         await query.message.edit_text(text, reply_markup=markup)
     except Exception:
         pass
+
+@app.on_callback_query(filters.regex(r"^ch_sel:(-?\d+):?(\d+)?"))
+async def channel_memory_select_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    if user_id not in PENDING_TASKS:
+        return await query.answer("❌ Task expired. Send link again.", show_alert=True)
+
+    match = query.matches[0]
+    channel_id = int(match.group(1))
+    thread_id = int(match.group(2)) if match.group(2) and match.group(2) != "0" else None
+
+    ch = await db.get_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type="dest")
+    title = ch.get("channel_title") if ch else f"Chat {channel_id}"
+
+    # Verify write access
+    has_access, error_msg = await test_destination_access(client, channel_id, thread_id)
+    if not has_access:
+        return await query.message.edit_text(
+            f"❌ <b>Destination Inaccessible</b>\n\n"
+            f"I cannot post in <b>{html.escape(str(title))}</b> (<code>{channel_id}</code>).\n"
+            f"<b>Details:</b> <code>{error_msg}</code>\n\n"
+            f"<i>Make sure I am an administrator in that chat with post permissions.</i>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Saved Channels", callback_data="dest_custom")],
+                [InlineKeyboardButton("🛑 Cancel", callback_data="cancel_setup")]
+            ])
+        )
+
+    PENDING_TASKS[user_id]["dest_chat_id"] = channel_id
+    PENDING_TASKS[user_id]["dest_thread_id"] = thread_id
+    PENDING_TASKS[user_id]["dest_title"] = title
+    PENDING_TASKS[user_id]["status"] = "waiting_speed"
+
+    # Update use count
+    await db.save_channel(user_id, channel_id, title, channel_type="dest", thread_id=thread_id)
+    await ask_for_speed(query.message)
+
+@app.on_callback_query(filters.regex(r"^ch_watch_sel:(-?\d+):?(\d+)?"))
+async def channel_memory_watch_select_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+
+    match = query.matches[0]
+    channel_id = int(match.group(1))
+    thread_id = int(match.group(2)) if match.group(2) and match.group(2) != "0" else None
+
+    ch = await db.get_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type="source")
+    raw_title = ch.get("channel_title") if ch else None
+    title = await auto_resolve_channel_title(client, user_id, channel_id, raw_title, channel_type="source")
+
+    # Generate canonical link representation for check_link_restriction
+    clean_id = str(channel_id).replace("-100", "")
+    link_repr = f"https://t.me/c/{clean_id}/{thread_id or 1}"
+    is_restricted, status_text = await check_link_restriction(user_id, link_repr)
+
+    PENDING_TASKS[user_id] = {
+        "mode": "WATCHER",
+        "link": link_repr,
+        "source_chat_id": channel_id,
+        "source_thread_id": thread_id,
+        "source_title": title,
+        "is_restricted": is_restricted,
+        "status": "waiting_choice"
+    }
+
+    # Update use count
+    await db.save_channel(user_id, channel_id, title, channel_type="source", thread_id=thread_id)
+
+    buttons = [
+        [InlineKeyboardButton("📂 Send to DM (Here)", callback_data="dest_dm")],
+        [InlineKeyboardButton("📢 Send to Destination Channel", callback_data="dest_custom")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_setup")]
+    ]
+
+    await query.message.edit_text(
+        f"👀 <b>Watcher Setup: Source Selected</b>\n\n"
+        f"📥 <b>Source:</b> <b>{html.escape(str(title))}</b>\n"
+        f"🆔 <code>{channel_id}</code>"
+        + (f" (Topic: <code>{thread_id}</code>)\n" if thread_id else "\n")
+        + f"{status_text}\n\n"
+        "<b>Where should new incoming messages go?</b>",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+    await query.answer(f"Source: {title[:20]}")
 
 @app.on_callback_query(filters.regex(r"^ch_manual$"))
 async def channel_memory_manual_callback(client: Client, query: CallbackQuery):
@@ -3229,17 +3443,38 @@ async def channel_memory_manual_callback(client: Client, query: CallbackQuery):
         [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_setup")]
     ]
     await query.message.edit_text(
-        "📝 <b>Send the Target Chat ID or Link</b>\n\n"
+        "📝 <b>Send the Target Destination Chat ID or Link</b>\n\n"
         "Examples:\n"
         "• Channel/Group: <code>-100123456789</code>\n"
         "• Specific Topic: <code>-100123456789/5</code>\n"
         "• Public Link: <code>https://t.me/your_channel</code>\n\n"
-        "💡 <i>I will automatically save this channel to your quick memory once tested!</i>",
+        "💡 <i>I will automatically save this channel to your quick destination memory!</i>",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
     await query.answer()
 
-@app.on_callback_query(filters.regex(r"^ch_inspect:(-?\d+):?(\d+)?:?(\d+)?"))
+@app.on_callback_query(filters.regex(r"^watch_manual$"))
+async def watch_manual_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    
+    buttons = [
+        [InlineKeyboardButton("➕ Add Source Channel", callback_data="prompt_add_source")],
+        [InlineKeyboardButton("🔙 Back to Saved Sources", callback_data="ch_page:1:watch_select:source")],
+        [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+    ]
+    await query.message.edit_text(
+        "👀 <b>Manual Watcher Link Input</b>\n\n"
+        "Simply send the watch command with the link directly in chat:\n\n"
+        "• <code>/watch https://t.me/channel/123</code>\n"
+        "• <code>/watch https://t.me/c/1234567890/45</code> <i>(with topic)</i>\n\n"
+        "💡 <i>Or save it once with</i> <code>/addsourcechannel</code> <i>for 1-click watching!</i>",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+    await query.answer()
+
+@app.on_callback_query(filters.regex(r"^ch_inspect:(-?\d+):?(\d+)?:?(\d+)?:?(\w+)?"))
 async def channel_memory_inspect_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     if not is_authorized(user_id):
@@ -3249,30 +3484,36 @@ async def channel_memory_inspect_callback(client: Client, query: CallbackQuery):
     channel_id = int(match.group(1))
     thread_id = int(match.group(2)) if match.group(2) and match.group(2) != "0" else None
     page = int(match.group(3)) if match.group(3) else 1
+    ch_type = match.group(4) or "dest"
 
-    ch = await db.get_saved_channel(user_id, channel_id, thread_id)
+    is_source = (ch_type == "source")
+    type_label = "SOURCE" if is_source else "DESTINATION"
+
+    ch = await db.get_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type=ch_type)
     raw_title = ch.get("channel_title") if ch else None
-    title = await auto_resolve_channel_title(client, user_id, channel_id, raw_title)
+    title = await auto_resolve_channel_title(client, user_id, channel_id, raw_title, channel_type=ch_type)
     use_count = ch.get("use_count", 1) if ch else 1
     last_used = ch.get("last_used") if ch else None
     last_used_str = last_used.strftime("%d-%b-%Y %I:%M %p") if isinstance(last_used, datetime.datetime) else "Recently"
 
     detail_text = (
-        "📢 <b>SAVED CHANNEL DETAILS</b>\n"
+        f"📢 <b>SAVED {type_label} CHANNEL DETAILS</b>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
         f"🏷️ <b>Channel Name:</b> {html.escape(str(title))}\n"
         f"🆔 <b>Channel ID:</b> <code>{channel_id}</code>\n"
         f"🧵 <b>Topic ID:</b> <code>{thread_id or 'General / None'}</code>\n"
+        f"📂 <b>Channel Type:</b> <code>{type_label}</code>\n"
         f"📊 <b>Times Selected:</b> <code>{use_count}</code>\n"
         f"🕒 <b>Last Used:</b> <code>{last_used_str}</code>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
         "<i>What would you like to do with this saved channel?</i>"
     )
 
-    buttons = [
-        [InlineKeyboardButton("🗑️ Delete This Channel", callback_data=f"ch_promptdel:{channel_id}:{thread_id or 0}:{page}")],
-        [InlineKeyboardButton("🔙 Back to Channels List", callback_data=f"ch_page:{page}:view")]
-    ]
+    buttons = []
+    if is_source:
+        buttons.append([InlineKeyboardButton("👀 Start Watching This Channel", callback_data=f"ch_watch_sel:{channel_id}:{thread_id or 0}")])
+    buttons.append([InlineKeyboardButton(f"🗑️ Delete This {type_label.capitalize()} Channel", callback_data=f"ch_promptdel:{channel_id}:{thread_id or 0}:{page}:{ch_type}")])
+    buttons.append([InlineKeyboardButton(f"🔙 Back to {type_label.capitalize()} Channels", callback_data=f"ch_page:{page}:{ch_type}_view:{ch_type}")])
 
     try:
         await query.message.edit_text(detail_text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -3280,7 +3521,7 @@ async def channel_memory_inspect_callback(client: Client, query: CallbackQuery):
         pass
     await query.answer()
 
-@app.on_callback_query(filters.regex(r"^ch_promptdel:(-?\d+):?(\d+)?:?(\d+)?"))
+@app.on_callback_query(filters.regex(r"^ch_promptdel:(-?\d+):?(\d+)?:?(\d+)?:?(\w+)?"))
 async def channel_memory_prompt_delete_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     if not is_authorized(user_id):
@@ -3290,22 +3531,27 @@ async def channel_memory_prompt_delete_callback(client: Client, query: CallbackQ
     channel_id = int(match.group(1))
     thread_id = int(match.group(2)) if match.group(2) and match.group(2) != "0" else None
     page = int(match.group(3)) if match.group(3) else 1
+    ch_type = match.group(4) or "dest"
 
-    ch = await db.get_saved_channel(user_id, channel_id, thread_id)
+    is_source = (ch_type == "source")
+    type_label = "SOURCE" if is_source else "DESTINATION"
+
+    ch = await db.get_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type=ch_type)
     title = ch.get("channel_title") if ch else f"Chat {channel_id}"
 
     confirm_text = (
-        "⚠️ <b>CONFIRM CHANNEL DELETION</b>\n"
+        f"⚠️ <b>CONFIRM {type_label} CHANNEL DELETION</b>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        "Are you sure you want to permanently delete this channel from saved memory?\n\n"
+        f"Are you sure you want to permanently delete this {type_label.lower()} channel from saved memory?\n\n"
         f"📢 <b>Channel:</b> {html.escape(str(title))}\n"
-        f"🆔 <b>ID:</b> <code>{channel_id}</code>\n\n"
+        f"🆔 <b>ID:</b> <code>{channel_id}</code>\n"
+        f"📂 <b>Type:</b> <code>{type_label}</code>\n\n"
         "<i>(Note: This only removes the quick-select shortcut from the bot. Your Telegram channel is completely safe.)</i>"
     )
 
     buttons = [
-        [InlineKeyboardButton("✅ Yes, Confirm Delete", callback_data=f"ch_dodel:{channel_id}:{thread_id or 0}:{page}")],
-        [InlineKeyboardButton("❌ Cancel (Keep Channel)", callback_data=f"ch_inspect:{channel_id}:{thread_id or 0}:{page}")]
+        [InlineKeyboardButton("✅ Yes, Confirm Delete", callback_data=f"ch_dodel:{channel_id}:{thread_id or 0}:{page}:{ch_type}")],
+        [InlineKeyboardButton("❌ Cancel (Keep Channel)", callback_data=f"ch_inspect:{channel_id}:{thread_id or 0}:{page}:{ch_type}")]
     ]
 
     try:
@@ -3314,7 +3560,7 @@ async def channel_memory_prompt_delete_callback(client: Client, query: CallbackQ
         pass
     await query.answer()
 
-@app.on_callback_query(filters.regex(r"^ch_dodel:(-?\d+):?(\d+)?:?(\d+)?"))
+@app.on_callback_query(filters.regex(r"^ch_dodel:(-?\d+):?(\d+)?:?(\d+)?:?(\w+)?"))
 async def channel_memory_do_delete_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     if not is_authorized(user_id):
@@ -3324,22 +3570,27 @@ async def channel_memory_do_delete_callback(client: Client, query: CallbackQuery
     channel_id = int(match.group(1))
     thread_id = int(match.group(2)) if match.group(2) and match.group(2) != "0" else None
     page = int(match.group(3)) if match.group(3) else 1
+    ch_type = match.group(4) or "dest"
 
-    ch = await db.get_saved_channel(user_id, channel_id, thread_id)
+    is_source = (ch_type == "source")
+    type_label = "SOURCE" if is_source else "DESTINATION"
+
+    ch = await db.get_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type=ch_type)
     title = ch.get("channel_title") if ch else f"Chat {channel_id}"
 
-    deleted = await db.delete_saved_channel(user_id, channel_id, thread_id)
+    deleted = await db.delete_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type=ch_type)
     if deleted:
         await query.answer(f"🗑️ '{title[:25]}' removed from memory!", show_alert=True)
     else:
         await query.answer("Channel was already removed.", show_alert=False)
 
-    saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
+    saved_channels = await db.get_saved_channels(user_id, channel_type=ch_type)
     if not saved_channels:
+        add_btn = InlineKeyboardButton("➕ Add Source Channel", callback_data="prompt_add_source") if is_source else InlineKeyboardButton("➕ Add Destination Channel", callback_data="prompt_add_dest")
         try:
             await query.message.edit_text(
-                "📁 <b>YOUR CHANNEL MEMORY IS EMPTY</b>\n\nAll saved channels have been removed from quick memory.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="ch_close")]])
+                f"📁 <b>YOUR {type_label} CHANNEL MEMORY IS EMPTY</b>\n\nAll saved {type_label.lower()} channels have been removed from quick memory.",
+                reply_markup=InlineKeyboardMarkup([[add_btn], [InlineKeyboardButton("❌ Close", callback_data="ch_close")]])
             )
         except Exception:
             pass
@@ -3347,7 +3598,7 @@ async def channel_memory_do_delete_callback(client: Client, query: CallbackQuery
 
     total_pages = max(1, math.ceil(len(saved_channels) / 10))
     if page > total_pages: page = total_pages
-    text, markup = build_channel_memory_ui(saved_channels, page=page, mode="view")
+    text, markup = build_channel_memory_ui(saved_channels, page=page, mode="view", channel_type=ch_type)
     try:
         await query.message.edit_text(text, reply_markup=markup)
     except Exception:
@@ -3360,8 +3611,43 @@ async def channel_memory_close_callback(client: Client, query: CallbackQuery):
     except Exception:
         await query.answer()
 
-@app.on_message(filters.command(["viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels"]) & filters.private)
-async def saved_channels_command(client: Client, message: Message):
+@app.on_message(filters.command(["viewsourcechannels", "viewsources", "viewsource", "sourcechannels", "sources"]) & filters.private)
+async def view_source_channels_command(client: Client, message: Message):
+    if not message.chat or message.chat.type != enums.ChatType.PRIVATE:
+        return
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id or getattr(message.from_user, "is_bot", False):
+        return
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+        
+    saved_channels = await db.get_saved_channels(user_id, channel_type="source")
+    if not saved_channels:
+        empty_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add Source Channel", callback_data="prompt_add_source")],
+            [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+        ])
+        return await message.reply(
+            "📁 <b>YOUR SOURCE CHANNEL MEMORY IS EMPTY</b>\n\n"
+            "You haven't saved any source channels yet.\n\n"
+            "Source channels are the channels you watch with <code>/watch</code> or forward content from.\n"
+            "You can save any channel using <code>/addsourcechannel</code> or the button below:\n\n"
+            "<i>Your saved source channels will appear as quick-select buttons in <code>/watch</code> for 1-click real-time routing!</i>",
+            reply_markup=empty_markup,
+            quote=True
+        )
+
+    for ch in saved_channels[:10]:
+        ch_id = ch["channel_id"]
+        t = ch.get("channel_title")
+        if not t or t.startswith("Chat ") or t in ["Target Chat", "Destination", "Source"]:
+            asyncio.create_task(auto_resolve_channel_title(client, user_id, ch_id, t, channel_type="source"))
+
+    text, markup = build_channel_memory_ui(saved_channels, page=1, mode="view", channel_type="source")
+    await message.reply(text, reply_markup=markup, quote=True)
+
+@app.on_message(filters.command(["viewdestinationchannels", "viewdestchannels", "viewdest", "viewdestination", "destchannels", "destinations"]) & filters.private)
+async def view_destination_channels_command(client: Client, message: Message):
     if not message.chat or message.chat.type != enums.ChatType.PRIVATE:
         return
     user_id = message.from_user.id if message.from_user else 0
@@ -3373,80 +3659,114 @@ async def saved_channels_command(client: Client, message: Message):
     saved_channels = await db.get_saved_channels(user_id, channel_type="dest")
     if not saved_channels:
         empty_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add Destination Channel", callback_data="prompt_add_channel")],
+            [InlineKeyboardButton("➕ Add Destination Channel", callback_data="prompt_add_dest")],
             [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
         ])
         return await message.reply(
-            "📁 <b>YOUR CHANNEL MEMORY IS EMPTY</b>\n\n"
+            "📁 <b>YOUR DESTINATION CHANNEL MEMORY IS EMPTY</b>\n\n"
             "You haven't saved any destination channels yet.\n\n"
             "Whenever you send content to a channel or enter a channel ID/link, this bot automatically remembers it.\n"
-            "You can also manually save any channel using <code>/addchannel</code> or the button below:\n\n"
+            "You can also manually save any channel using <code>/adddestinationchannel</code> or the button below:\n\n"
             "<i>Your saved channels will appear as 10 quick-select buttons per page during forwarding setups!</i>",
             reply_markup=empty_markup,
             quote=True
         )
 
-    # Auto-resolve names for channels on first page in background
     for ch in saved_channels[:10]:
         ch_id = ch["channel_id"]
         t = ch.get("channel_title")
         if not t or t.startswith("Chat ") or t in ["Target Chat", "Destination"]:
-            asyncio.create_task(auto_resolve_channel_title(client, user_id, ch_id, t))
+            asyncio.create_task(auto_resolve_channel_title(client, user_id, ch_id, t, channel_type="dest"))
 
-    text, markup = build_channel_memory_ui(saved_channels, page=1, mode="view")
+    text, markup = build_channel_memory_ui(saved_channels, page=1, mode="view", channel_type="dest")
     await message.reply(text, reply_markup=markup, quote=True)
 
-async def process_add_channel_submission(client: Client, message: Message, raw_input: str, prompt_msg_id: int = None):
+@app.on_message(filters.command(["viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels"]) & filters.private)
+async def legacy_saved_channels_command(client: Client, message: Message):
+    if not message.chat or message.chat.type != enums.ChatType.PRIVATE:
+        return
     user_id = message.from_user.id if message.from_user else 0
-    if not user_id or not is_authorized(user_id):
+    if not user_id or getattr(message.from_user, "is_bot", False):
+        return
+    if not is_authorized(user_id):
         return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+        
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 View Source Channels (Watch)", callback_data="ch_page:1:source_view:source")],
+        [InlineKeyboardButton("📤 View Destination Channels (Forward)", callback_data="ch_page:1:dest_view:dest")],
+        [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+    ])
+    await message.reply(
+        "🗂️ <b>SAVED CHANNELS MANAGER</b>\n\n"
+        "Channels are now organized into two dedicated categories:\n\n"
+        "• 📥 <b>Source Channels:</b> Channels you monitor with <code>/watch</code>\n"
+        "• 📤 <b>Destination Channels:</b> Channels you forward content to\n\n"
+        "<i>Select which list you want to view:</i>",
+        reply_markup=markup,
+        quote=True
+    )
 
-    dest_chat_id, dest_thread_id, custom_title = parse_channel_input(raw_input)
-    if not dest_chat_id:
+async def process_add_channel_submission(client: Client, message: Message, raw_input: str, prompt_msg_id: int = None, channel_type: str = "dest"):
+    user_id = message.from_user.id
+    target_chat_id, dest_thread_id, custom_title = parse_channel_input(raw_input)
+    ch_type = str(channel_type or "dest").lower()
+    is_source = (ch_type == "source")
+    type_label = "SOURCE" if is_source else "DESTINATION"
+
+    if not target_chat_id:
+        cmd_example = "/addsourcechannel" if is_source else "/adddestinationchannel"
         return await message.reply(
-            "❌ <b>Invalid Channel Input</b>\n\n"
-            "Please provide a valid channel ID (e.g. <code>-100xxxxxxxxxx</code>), @username, or link.\n\n"
-            "<b>Examples:</b>\n"
-            "• <code>/addchannel -1001234567890</code>\n"
-            "• <code>/addchannel -1001234567890 My Backup Channel</code>\n"
-            "• <code>https://t.me/c/1234567890</code>\n"
-            "• <code>@channelusername</code>",
+            f"❌ <b>Invalid Channel Input</b>\n\n"
+            f"Please provide a valid channel ID (e.g. <code>-100xxxxxxxxxx</code>), @username, or link.\n\n"
+            f"<b>Examples:</b>\n"
+            f"• <code>{cmd_example} -1001234567890</code>\n"
+            f"• <code>{cmd_example} -1001234567890 My Custom Name</code>\n"
+            f"• <code>https://t.me/c/1234567890</code>\n"
+            f"• <code>@channelusername</code>",
             quote=True
         )
 
-    status_msg = await message.reply("🔄 <b>Auto-detecting channel details & verifying permissions...</b>", quote=True)
+    status_msg = await message.reply(f"🔄 <b>Auto-detecting {type_label.lower()} channel details...</b>", quote=True)
 
     # 1. Auto-recognize channel title and details
     real_chat = None
     try:
-        real_chat = await client.get_chat(dest_chat_id)
+        real_chat = await client.get_chat(target_chat_id)
     except Exception:
         if user_id in USER_CLIENTS and getattr(USER_CLIENTS[user_id], "is_connected", False):
             try:
-                real_chat = await USER_CLIENTS[user_id].get_chat(dest_chat_id)
+                real_chat = await USER_CLIENTS[user_id].get_chat(target_chat_id)
             except Exception:
                 pass
 
     if real_chat:
-        dest_chat_id = real_chat.id
+        target_chat_id = real_chat.id
         auto_title = real_chat.title or getattr(real_chat, "first_name", None) or f"Chat {real_chat.id}"
         if not getattr(real_chat, "is_forum", False):
             dest_thread_id = None
     else:
         auto_title = None
 
-    final_title = custom_title or auto_title or f"Chat {dest_chat_id}"
+    final_title = custom_title or auto_title or f"Chat {target_chat_id}"
 
-    # 2. Check destination write access
-    has_access, error_msg = await test_destination_access(client, dest_chat_id, dest_thread_id)
+    # 2. Check permissions if destination
+    has_access = True
+    admin_note = ""
+    if not is_source:
+        has_access, error_msg = await test_destination_access(client, target_chat_id, dest_thread_id)
+        admin_note = (
+            "\n🤖 <b>Bot Status:</b> ✅ Administrator verified with post rights."
+            if has_access
+            else f"\n🤖 <b>Bot Status:</b> ⚠️ Bot is not an admin yet. Please add this bot to the channel with 'Post Messages' rights before forwarding content."
+        )
 
     # 3. Save into MongoDB user memory
     try:
         await db.save_channel(
             user_id=user_id,
-            channel_id=dest_chat_id,
+            channel_id=target_chat_id,
             channel_title=final_title,
-            channel_type="dest",
+            channel_type=ch_type,
             thread_id=dest_thread_id
         )
     except Exception as e_db:
@@ -3455,38 +3775,44 @@ async def process_add_channel_submission(client: Client, message: Message, raw_i
     # 4. Count total saved channels for user
     total_saved = 0
     try:
-        saved_list = await db.get_saved_channels(user_id, channel_type="dest")
+        saved_list = await db.get_saved_channels(user_id, channel_type=ch_type)
         total_saved = len(saved_list)
     except Exception:
         pass
 
-    admin_note = (
-        "✅ <b>Ready:</b> Bot has verified administrator posting rights."
-        if has_access
-        else f"⚠️ <b>Notice:</b> Bot is not an admin yet. Please add this bot to the channel with 'Post Messages' rights before forwarding content."
+    help_note = (
+        "<i>This channel will now appear in your saved source list during <code>/watch</code> setups for 1-tap real-time routing!</i>"
+        if is_source
+        else "<i>This channel will now appear in your saved destination list (10 buttons per page) during forwarding setups!</i>"
     )
 
     success_text = (
-        "🎉 <b>CHANNEL SAVED TO MEMORY!</b>\n"
+        f"🎉 <b>{type_label} CHANNEL SAVED TO MEMORY!</b>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
         f"🏷️ <b>Channel Title:</b> <b>{html.escape(str(final_title))}</b>\n"
-        f"🆔 <b>Channel ID:</b> <code>{dest_chat_id}</code>\n"
+        f"🆔 <b>Channel ID:</b> <code>{target_chat_id}</code>\n"
         + (f"📌 <b>Topic ID:</b> <code>{dest_thread_id}</code>\n" if dest_thread_id else "")
-        + f"🤖 <b>Bot Status:</b> {admin_note}\n"
-        f"📊 <b>Total Channels in Memory:</b> <code>{total_saved}</code>\n"
+        + admin_note
+        + f"\n📊 <b>Total {type_label.capitalize()} Channels in Memory:</b> <code>{total_saved}</code>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        "<i>This channel will now appear in your saved destination list (10 buttons per page) during forwarding setups!</i>"
+        + help_note
     )
 
-    markup = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📑 View Saved Channels", callback_data="ch_pg:1"),
-            InlineKeyboardButton("➕ Add Another", callback_data="prompt_add_channel")
-        ],
-        [InlineKeyboardButton("❌ Close", callback_data="ch_close")]
-    ])
+    action_buttons = []
+    if is_source:
+        action_buttons.append([InlineKeyboardButton("👀 Start Watching Now", callback_data=f"ch_watch_sel:{target_chat_id}:{dest_thread_id or 0}")])
+        action_buttons.append([
+            InlineKeyboardButton("📋 View Source Channels", callback_data="ch_page:1:source_view:source"),
+            InlineKeyboardButton("➕ Add Another", callback_data="prompt_add_source")
+        ])
+    else:
+        action_buttons.append([
+            InlineKeyboardButton("📑 View Destination Channels", callback_data="ch_page:1:dest_view:dest"),
+            InlineKeyboardButton("➕ Add Another", callback_data="prompt_add_dest")
+        ])
+    action_buttons.append([InlineKeyboardButton("❌ Close", callback_data="ch_close")])
 
-    await status_msg.edit(success_text, reply_markup=markup)
+    await status_msg.edit(success_text, reply_markup=InlineKeyboardMarkup(action_buttons))
 
     if prompt_msg_id:
         try:
@@ -3494,8 +3820,8 @@ async def process_add_channel_submission(client: Client, message: Message, raw_i
         except Exception:
             pass
 
-@app.on_message(filters.command(["addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel"]) & filters.private)
-async def add_channel_command(client: Client, message: Message):
+@app.on_message(filters.command(["addsourcechannel", "addsource", "savesourcechannel", "savesource"]) & filters.private)
+async def add_source_channel_command(client: Client, message: Message):
     if not message.chat or message.chat.type != enums.ChatType.PRIVATE:
         return
     user_id = message.from_user.id if message.from_user else 0
@@ -3508,13 +3834,52 @@ async def add_channel_command(client: Client, message: Message):
     parts = text.split(maxsplit=1)
     
     if len(parts) > 1 and parts[1].strip():
-        await process_add_channel_submission(client, message, parts[1].strip())
+        await process_add_channel_submission(client, message, parts[1].strip(), channel_type="source")
         return
 
     prompt_text = (
-        "➕ <b>ADD SAVED DESTINATION CHANNEL</b>\n"
+        "📥 <b>ADD SAVED SOURCE CHANNEL</b>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        "Please send the <b>Channel ID</b>, <b>@username</b>, or <b>invite link</b> of the channel you want to save.\n\n"
+        "Please send the <b>Source Channel ID</b>, <b>@username</b>, or <b>invite link</b> of the channel you want to save for watching or forwarding.\n\n"
+        "<b>Supported Formats:</b>\n"
+        "• <code>-1001234567890</code>\n"
+        "• <code>-1001234567890 Optional Custom Title</code>\n"
+        "• <code>https://t.me/c/1234567890</code>\n"
+        "• <code>https://t.me/c/1234567890/45</code> <i>(with Topic ID)</i>\n"
+        "• <code>@channelusername</code>\n\n"
+        "💡 <i>The bot will automatically recognize the channel's real name from Telegram!</i>\n\n"
+        "<i>Or send</i> <code>/addsourcechannel -100xxxxxxxxxx</code> <i>anytime directly.</i>"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 View Source Channels", callback_data="ch_page:1:source_view:source")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
+    ])
+
+    prompt_msg = await message.reply(prompt_text, reply_markup=markup, quote=True)
+    PENDING_ADD_CHANNEL[user_id] = {"prompt_msg_id": prompt_msg.id, "channel_type": "source"}
+
+@app.on_message(filters.command(["adddestinationchannel", "adddestination", "adddestchannel", "adddest", "savedestchannel", "savedestination"]) & filters.private)
+async def add_destination_channel_command(client: Client, message: Message):
+    if not message.chat or message.chat.type != enums.ChatType.PRIVATE:
+        return
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id or getattr(message.from_user, "is_bot", False):
+        return
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+
+    text = message.text.strip() if message.text else ""
+    parts = text.split(maxsplit=1)
+    
+    if len(parts) > 1 and parts[1].strip():
+        await process_add_channel_submission(client, message, parts[1].strip(), channel_type="dest")
+        return
+
+    prompt_text = (
+        "📤 <b>ADD SAVED DESTINATION CHANNEL</b>\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        "Please send the <b>Destination Channel ID</b>, <b>@username</b>, or <b>invite link</b> of the channel you want to save.\n\n"
         "<b>Supported Formats:</b>\n"
         "• <code>-1001234567890</code>\n"
         "• <code>-1001234567890 Optional Custom Title</code>\n"
@@ -3522,27 +3887,57 @@ async def add_channel_command(client: Client, message: Message):
         "• <code>https://t.me/c/1234567890/45</code> <i>(with Forum Topic ID)</i>\n"
         "• <code>@channelusername</code>\n\n"
         "💡 <i>The bot will automatically recognize the channel's real name from Telegram!</i>\n\n"
-        "<i>Or send</i> <code>/addchannel -100xxxxxxxxxx</code> <i>anytime directly.</i>"
+        "<i>Or send</i> <code>/adddestinationchannel -100xxxxxxxxxx</code> <i>anytime directly.</i>"
     )
 
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📑 View Saved Channels", callback_data="ch_pg:1")],
+        [InlineKeyboardButton("📑 View Destination Channels", callback_data="ch_page:1:dest_view:dest")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
     ])
 
     prompt_msg = await message.reply(prompt_text, reply_markup=markup, quote=True)
-    PENDING_ADD_CHANNEL[user_id] = prompt_msg.id
+    PENDING_ADD_CHANNEL[user_id] = {"prompt_msg_id": prompt_msg.id, "channel_type": "dest"}
 
-@app.on_callback_query(filters.regex(r"^prompt_add_channel$"))
-async def prompt_add_channel_callback(client: Client, query: CallbackQuery):
+@app.on_message(filters.command(["addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel"]) & filters.private)
+async def legacy_add_channel_command(client: Client, message: Message):
+    if not message.chat or message.chat.type != enums.ChatType.PRIVATE:
+        return
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id or getattr(message.from_user, "is_bot", False):
+        return
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+
+    text = message.text.strip() if message.text else ""
+    parts = text.split(maxsplit=1)
+    if len(parts) > 1 and parts[1].strip():
+        await process_add_channel_submission(client, message, parts[1].strip(), channel_type="dest")
+        return
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 Add Source Channel (Watch)", callback_data="prompt_add_source")],
+        [InlineKeyboardButton("📤 Add Destination Channel (Forward)", callback_data="prompt_add_dest")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
+    ])
+    await message.reply(
+        "➕ <b>ADD SAVED CHANNEL</b>\n\n"
+        "Which type of channel would you like to save?\n\n"
+        "• 📥 <b>Source Channel:</b> Channels you want to monitor with <code>/watch</code>\n"
+        "• 📤 <b>Destination Channel:</b> Channels where forwarded files and messages go",
+        reply_markup=markup,
+        quote=True
+    )
+
+@app.on_callback_query(filters.regex(r"^prompt_add_source$"))
+async def prompt_add_source_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     if not is_authorized(user_id):
         return await query.answer("⛔ Access Denied.", show_alert=True)
     
     prompt_text = (
-        "➕ <b>ADD SAVED DESTINATION CHANNEL</b>\n"
+        "📥 <b>ADD SAVED SOURCE CHANNEL</b>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        "Please send the <b>Channel ID</b>, <b>@username</b>, or <b>invite link</b> of the channel you want to save.\n\n"
+        "Please send the <b>Source Channel ID</b>, <b>@username</b>, or <b>invite link</b> of the channel you want to save for watching.\n\n"
         "<b>Supported Formats:</b>\n"
         "• <code>-1001234567890</code>\n"
         "• <code>-1001234567890 Optional Custom Title</code>\n"
@@ -3552,15 +3947,46 @@ async def prompt_add_channel_callback(client: Client, query: CallbackQuery):
         "💡 <i>The bot will automatically recognize the channel's real name from Telegram!</i>"
     )
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Back to Channels List", callback_data="ch_pg:1")],
+        [InlineKeyboardButton("🔙 Back to Source Channels", callback_data="ch_page:1:source_view:source")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
     ])
     try:
         await query.message.edit_text(prompt_text, reply_markup=markup)
-        PENDING_ADD_CHANNEL[user_id] = query.message.id
+        PENDING_ADD_CHANNEL[user_id] = {"prompt_msg_id": query.message.id, "channel_type": "source"}
     except Exception:
         pass
-    await query.answer()
+
+@app.on_callback_query(filters.regex(r"^prompt_add_dest$"))
+async def prompt_add_dest_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+    
+    prompt_text = (
+        "📤 <b>ADD SAVED DESTINATION CHANNEL</b>\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        "Please send the <b>Destination Channel ID</b>, <b>@username</b>, or <b>invite link</b> of the channel you want to save.\n\n"
+        "<b>Supported Formats:</b>\n"
+        "• <code>-1001234567890</code>\n"
+        "• <code>-1001234567890 Optional Custom Title</code>\n"
+        "• <code>https://t.me/c/1234567890</code>\n"
+        "• <code>https://t.me/c/1234567890/45</code> <i>(with Forum Topic ID)</i>\n"
+        "• <code>@channelusername</code>\n\n"
+        "💡 <i>The bot will automatically recognize the channel's real name from Telegram!</i>"
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Back to Destination Channels", callback_data="ch_page:1:dest_view:dest")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
+    ])
+    try:
+        await query.message.edit_text(prompt_text, reply_markup=markup)
+        PENDING_ADD_CHANNEL[user_id] = {"prompt_msg_id": query.message.id, "channel_type": "dest"}
+    except Exception:
+        pass
+
+@app.on_callback_query(filters.regex(r"^prompt_add_channel$"))
+async def prompt_add_channel_legacy_callback(client: Client, query: CallbackQuery):
+    await prompt_add_dest_callback(client, query)
 
 @app.on_callback_query(filters.regex(r"^cancel_add_channel$"))
 async def cancel_add_channel_callback(client: Client, query: CallbackQuery):
@@ -3594,9 +4020,10 @@ async def sync_commands_command(client: Client, message: Message):
         await status_msg.edit(
             "✅ <b>Telegram Bot Commands Synchronized Successfully!</b>\n\n"
             "The Telegram Menu button and <code>/</code> autocomplete list have been refreshed with all the latest commands:\n"
-            "• <code>/addchannel</code> - Add & save destination channel\n"
-            "• <code>/viewsavedchannels</code> - View saved channels\n"
-            "• <code>/savedchannels</code> - Quick list saved channels\n"
+            "• <code>/addsourcechannel</code> - Add & save source channel\n"
+            "• <code>/adddestinationchannel</code> - Add & save destination channel\n"
+            "• <code>/viewsourcechannels</code> - View & manage saved sources\n"
+            "• <code>/viewdestinationchannels</code> - View & manage saved destinations\n"
             "• and all system automation commands!\n\n"
             "<i>(Tip: If Telegram client app does not immediately refresh its cache, re-opening the chat or typing '/' triggers an instant cache reload.)</i>"
         )
@@ -3730,6 +4157,25 @@ async def finalize_watcher_setup(client, message, data, delay, user_id=None):
         allowed_types=data.get('allowed_types'),
         text_format=data.get('text_format')
     )
+    # Ensure source and destination channels are remembered in user memory
+    try:
+        await db.save_channel(
+            user_id=user_id,
+            channel_id=source_id,
+            channel_title=source_title,
+            channel_type="source",
+            thread_id=data.get('source_thread_id')
+        )
+        if dest_chat_id and dest_chat_id != user_id:
+            await db.save_channel(
+                user_id=user_id,
+                channel_id=dest_chat_id,
+                channel_title=data.get('dest_title', str(dest_chat_id)),
+                channel_type="dest",
+                thread_id=data.get('dest_thread_id')
+            )
+    except Exception:
+        pass
     
     fmt_str = ", ".join(data.get('text_format', [])) if data.get('text_format') else "Default"
 
@@ -4848,9 +5294,10 @@ async def register_bot_commands(bot_client: Client) -> bool:
         public_commands = [
             BotCommand("start", "⚡ Check Bot Is Working Or Not"),
             BotCommand("help", "🔎 Check How To Use Bot"),
-            BotCommand("addchannel", "➕ Save Destination Channel"),
-            BotCommand("viewsavedchannels", "📑 View & Manage Saved Channels"),
-            BotCommand("savedchannels", "📑 Quick List Saved Channels"),
+            BotCommand("addsourcechannel", "📥 Save Source Channel (Watch)"),
+            BotCommand("adddestinationchannel", "📤 Save Destination Channel"),
+            BotCommand("viewsourcechannels", "📋 View & Manage Saved Sources"),
+            BotCommand("viewdestinationchannels", "📑 View & Manage Saved Destinations"),
             BotCommand("login", "📍 Login Your Telegram String Session"),
             BotCommand("logout", "🚨 Logout Your Session"),
             BotCommand("dl", "🦥 Reply to the link to forward"),

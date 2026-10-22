@@ -4,7 +4,7 @@
 
 <br><br>
 
-# 🜏 𝕃𝕌ℂ𝕀𝔽𝔼ℝ 𝕄𝕆ℝℕ𝕀ℕ𝔾𝕊𝕋𝔸ℝ
+# 🤖 TELEGRAM RESTRICT BOT
 
 ### ⚜️ Precision-Built Telegram Automation, Synchronisation & Media Processing Engine ⚜️
 
@@ -33,7 +33,7 @@
 > 📢 **Official Channel:** `Private Channel`  
 > 💬 **Support Group:** `Private Support`  
 > 🍿 **Movie Request Group:** (https://t.me/)  
-> 🌟 **GitHub Repository:** [Auto-Filter-Bot-Lucifer](https://github.com/amit-ka-restrict-repo/)  
+> 🌟 **GitHub Repository:** [Restrict-Bot](https://github.com/amit-ka-restrict-repo/)  
 > 👨‍💻 **GitHub Profile:** `Private Development`  
 > 👑 **Lead Developer:** **Automation Engine**  
 ◈━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◈
@@ -282,7 +282,7 @@ To allow the MTProto engine to interact with Telegram's binary data clusters, yo
 1. Direct your browser to the official Telegram application portal: [👉 my.telegram.org](https://my.telegram.org/).
 2. Enter your telephone number in international format (e.g., `+447911123456`) and enter the confirmation code sent to your Telegram account.
 3. Select **API development tools**.
-4. Complete the **App title** and **Short name** fields (e.g., `LuciferEngine`).
+4. Complete the **App title** and **Short name** fields (e.g., `RestrictEngine`).
 5. Choose **Desktop** or **Other** under Platform.
 6. Submit the form.
 7. Safely record:
@@ -301,7 +301,7 @@ To allow the MTProto engine to interact with Telegram's binary data clusters, yo
 1. Open Telegram and initiate a conversation with [@BotFather](https://t.me/BotFather).
 2. Execute the `/newbot` command.
 3. Provide a friendly display name (e.g., `Telegram Automation Engine Engine`).
-4. Provide a unique username ending in `bot` (e.g., `LuciferMorningstar_SyncBot`).
+4. Provide a unique username ending in `bot` (e.g., `Restrict_SyncBot`).
 5. BotFather will issue your authentication token formatted as:
    ```text
    123456789:YOUR_BOT_TOKEN_HERE
@@ -348,7 +348,7 @@ Every configuration parameter is derived directly from the application source co
 | `API_HASH` | **Yes** | `""` | String | Telegram API Hash obtained from my.telegram.org. | `<YOUR_API_HASH>` |
 | `BOT_TOKEN` | **Yes** | `""` | String | Telegram Bot Token obtained from @BotFather. | `123456789:YOUR_BOT_TOKEN_HERE` |
 | `DB_URI` | **Yes** | `""` | String | MongoDB connection URI with read/write privileges. | `mongodb+srv://<username>:<password>@cluster0...` |
-| `DB_NAME` | **Yes** | `""` | String | MongoDB database name. Must be unique per bot instance. | `Lucifer_Cluster_01` |
+| `DB_NAME` | **Yes** | `""` | String | MongoDB database name. Must be unique per bot instance. | `Restrict_Cluster_01` |
 | `STRING_SESSION`| No | `None` | String | Pyrogram v2 string session for default userbot operations. | `BQAF...very_long_session_string` |
 | `LOG_CHANNEL` | No | `""` | String/Int | Channel ID (or `ID/Topic_ID`) for audit logs & crash alerts. | `-1001234567890` or `-1001234567890/42` |
 | `STATUS_UPDATE_INTERVAL` | No | `15` | Integer | Minimum interval (in seconds) between progress bar edits. | `15` |
@@ -377,6 +377,10 @@ Every configuration parameter is derived directly from the application source co
 | `/watchers` | `/list` | Private Chat | `/watchers` | Lists all active watchers with source, filters, formats, and targets. |
 | `/removetarget`| `/remove_target` | Private Chat | `/removetarget <src> <dst>` | Removes a specific destination channel from an active watcher. |
 | `/removesource`| `/unwatch` | Private Chat | `/unwatch <source_id>` | Terminates an entire watcher pipeline for a given source channel. |
+| `/addsourcechannel` | `/addsource` | Private Chat | `/addsourcechannel [ID/Link]` | Registers and auto-names a source channel in persistent memory. |
+| `/adddestinationchannel` | `/adddest` | Private Chat | `/adddestinationchannel [ID/Link]` | Validates admin write permissions and saves a destination channel. |
+| `/viewsourcechannels` | `/viewsources` | Private Chat | `/viewsourcechannels` | Interactive 10-per-page explorer for saved source channels with quick-watch. |
+| `/viewdestinationchannels` | `/viewdest` | Private Chat | `/viewdestinationchannels` | Interactive 10-per-page explorer for saved destination channels with deletion. |
 | `/tasks` | `/progress`| Private Chat | `/tasks` | Refreshes and re-displays active progress cards for ongoing tasks. |
 | `/cancel` | — | All Users | `/cancel` | Opens interactive menu to terminate specific tasks or all user tasks. |
 | `/login` | — | Private Chat | `/login` | Interactive phone login wizard generating a secure Pyrogram Userbot session. |
@@ -417,7 +421,7 @@ Every configuration parameter is derived directly from the application source co
 ### 🛰️ `/watch` — LIVE SURVEILLANCE & AUTO-FORWARDER
 ◈━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◈
 * **Purpose:** Installs a permanent 24/7 background watcher on a source channel or forum topic.
-* **Syntax:** `/watch https://t.me/channel_username/1` or `/watch https://t.me/c/1234567890/1`
+* **Syntax:** `/watch` *(select from saved source channels)* or `/watch <Link>`
 * **Access:** Private chat only.
 * **Interactive Setup Flow:**
   1. **Source Analysis:** Verifies peer accessibility and detects forum thread IDs.
@@ -571,6 +575,20 @@ Every configuration parameter is derived directly from the application source co
 
 <br>
 
+
+◈━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◈
+### 💾 SAVED CHANNEL MEMORY SUBSYSTEM (SOURCE & DESTINATION)
+◈━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◈
+* **Purpose:** Permanent database-backed storage for frequently used source and destination channels, eliminating manual channel ID lookups and enabling instant 1-click selection during forwarding tasks and watcher setup.
+* **Commands:**
+  * `/addsourcechannel` (Alias: `/addsource`) — Interactive or direct link/ID prompt to register and auto-name a source channel.
+  * `/adddestinationchannel` (Alias: `/adddest`) — Validates bot/userbot posting rights and registers destination channel/topic into database.
+  * `/viewsourcechannels` (Alias: `/viewsources`) — Paginated interactive browser (10 channels per page) with delete confirmation and 1-click `/watch` deployment.
+  * `/viewdestinationchannels` (Alias: `/viewdest`) — Paginated interactive browser for saved destination channels with delete confirmation.
+* **Watcher Integration:** Running `/watch` without arguments queries your saved source channels, presenting an interactive grid where tapping any channel immediately starts surveillance configuration!
+
+---
+
 ## 🛰️ 12. LIVE WATCHER SURVEILLANCE & AUTO-ROUTING ENGINE
 
 The Watcher system acts as an autonomous MTProto sentinel. Once configured, it continuously listens for incoming events on source channels or forum topics and immediately cascades them to assigned target destinations.
@@ -645,7 +663,7 @@ Genuine release brackets are **never** removed:
 ### 4. Split-Suffix Recognition & Pre-Extension Quality Fix
 Telegram split archives possess double extensions (`.mkv.001`, `.mp4.002`). Naive parsers mistakenly treat `.001` as the extension, creating malformed names like `Movie.mkv 720p.001`.
 
-The Lucifer engine utilizes a specialised regex:
+The automation engine utilizes a specialised regex:
 ```python
 EXT_SPLIT_REGEX = re.compile(
     r'^(?P<stem>.*?)(?P<ext>\.[a-zA-Z][a-zA-Z0-9]{1,4})(?P<split>\.\d{2,4})?(\s*(?:</[^>]+>)*\s*)$',
@@ -723,7 +741,7 @@ Stores registered users, active session strings, and personal API credentials.
 {
   "_id": {"$oid": "64fa12..."},
   "id": 123456789,
-  "name": "Lucifer Operator",
+  "name": "System Operator",
   "session": "BQAF...",
   "api_id": 12345678,
   "api_hash": "YOUR_API_HASH"
@@ -785,8 +803,8 @@ Maintains message ID pointers ensuring tasks resume seamlessly across server res
 
 ### Step 1: Clone Repository
 ```bash
-git clone https://gitlab.com/luciferopensource/amit-ka-restrict-repo.git
-cd Auto-Filter-Bot-Lucifer
+git clone https://gitlab.com/restrictopensource/amit-ka-restrict-repo.git
+cd Restrict-Bot
 ```
 
 ### Step 2: Configure Virtual Environment
@@ -814,7 +832,7 @@ API_ID=12345678
 API_HASH=your_api_hash_here
 BOT_TOKEN=123456789:YOUR_BOT_TOKEN_HERE
 DB_URI=mongodb+srv://<username>:<password>@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority
-DB_NAME=Lucifer_Local_Dev
+DB_NAME=Restrict_Local_Dev
 ADMINS=123456789
 LOG_CHANNEL=-1001234567890
 STATUS_UPDATE_INTERVAL=15
@@ -843,19 +861,19 @@ sudo apt-get install -y python3 python3-pip python3-venv git 7zip coreutils buil
 
 ### Step 2: Deploy Project Code
 ```bash
-sudo mkdir -p /opt/lucifer-engine
-sudo chown -R $USER:$USER /opt/lucifer-engine
-cd /opt/lucifer-engine
-git clone https://gitlab.com/luciferopensource/amit-ka-restrict-repo.git .
+sudo mkdir -p /opt/restrict-engine
+sudo chown -R $USER:$USER /opt/restrict-engine
+cd /opt/restrict-engine
+git clone https://gitlab.com/restrictopensource/amit-ka-restrict-repo.git .
 python3 -m venv venv
 source venv/bin/activate
 pip install --no-cache-dir -r requirements.txt
 ```
 
 ### Step 3: Configure System Environment
-Create the configuration file at `/opt/lucifer-engine/.env`:
+Create the configuration file at `/opt/restrict-engine/.env`:
 ```bash
-nano /opt/lucifer-engine/.env
+nano /opt/restrict-engine/.env
 ```
 Populate with your verified credentials:
 ```ini
@@ -863,7 +881,7 @@ API_ID=12345678
 API_HASH=your_api_hash_here
 BOT_TOKEN=123456789:YOUR_BOT_TOKEN_HERE
 DB_URI=mongodb+srv://<username>:<password>@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority
-DB_NAME=Lucifer_VPS_Prod
+DB_NAME=Restrict_VPS_Prod
 ADMINS=123456789
 LOG_CHANNEL=-1001234567890
 STATUS_UPDATE_INTERVAL=15
@@ -872,9 +890,9 @@ PORT=8080
 ```
 
 ### Step 4: Create Systemd Service Unit
-Create `/etc/systemd/system/lucifer.service`:
+Create `/etc/systemd/system/restrict.service`:
 ```bash
-sudo nano /etc/systemd/system/lucifer.service
+sudo nano /etc/systemd/system/restrict.service
 ```
 Insert the service definition:
 ```ini
@@ -885,9 +903,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/lucifer-engine
-EnvironmentFile=/opt/lucifer-engine/.env
-ExecStart=/opt/lucifer-engine/venv/bin/python3 restrict_bot.py
+WorkingDirectory=/opt/restrict-engine
+EnvironmentFile=/opt/restrict-engine/.env
+ExecStart=/opt/restrict-engine/venv/bin/python3 restrict_bot.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -901,17 +919,17 @@ WantedBy=multi-user.target
 ### Step 5: Enable & Launch Service
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable lucifer.service
-sudo systemctl start lucifer.service
+sudo systemctl enable restrict.service
+sudo systemctl start restrict.service
 ```
 
 ### Step 6: Monitor Live Telemetry
 ```bash
 # View real-time systemd service journal
-sudo journalctl -u lucifer.service -f
+sudo journalctl -u restrict.service -f
 
 # View internal application audit log
-tail -f /opt/lucifer-engine/bot.log
+tail -f /opt/restrict-engine/bot.log
 ```
 
 ---
@@ -924,31 +942,31 @@ The repository includes a production-optimised `Dockerfile` utilizing `python:3.
 
 ### Step 1: Build the Docker Image
 ```bash
-docker build -t lucifer-morningstar:latest .
+docker build -t restrict-bot:latest .
 ```
 
 ### Step 2: Execute Container with Environment Injection
 ```bash
 docker run -d \
-  --name lucifer-engine \
+  --name restrict-engine \
   --restart always \
   -p 8080:8080 \
-  -v lucifer_data:/app/downloads \
+  -v restrict_data:/app/downloads \
   --env-file .env \
-  lucifer-morningstar:latest
+  restrict-bot:latest
 ```
 
 ### Step 3: Inspect Logs & Lifecycle
 ```bash
 # Stream live container logs
-docker logs -f lucifer-engine
+docker logs -f restrict-engine
 
 # Inspect container operational status
-docker ps -f name=lucifer-engine
+docker ps -f name=restrict-engine
 
 # Stop and restart container
-docker stop lucifer-engine
-docker start lucifer-engine
+docker stop restrict-engine
+docker start restrict-engine
 ```
 
 ---
@@ -1057,7 +1075,7 @@ You can construct a **Distributed Multi-Clone Cluster**:
 ## 📁 24. OFFICIAL PROJECT STRUCTURE
 
 ```text
-Auto-Filter-Bot-Lucifer/
+Restrict-Bot/
 │
 ├── 🐍 restrict_bot.py      # Core MTProto engine, handlers, cleaner, watchers & web server
 ├── 📦 requirements.txt     # Python runtime library dependencies (Pyrogram, Motor, etc.)
@@ -1136,10 +1154,10 @@ Never commit, share, or upload any of the following credentials:
 ### Updating an Existing Deployment
 ```bash
 # 1. Access project directory
-cd /opt/lucifer-engine
+cd /opt/restrict-engine
 
 # 2. Halt running service
-sudo systemctl stop lucifer.service
+sudo systemctl stop restrict.service
 
 # 3. Pull latest updates from Git
 git pull origin main
@@ -1149,18 +1167,18 @@ source venv/bin/activate
 pip install --upgrade -r requirements.txt
 
 # 5. Restart service and verify telemetry
-sudo systemctl start lucifer.service
-sudo journalctl -u lucifer.service -f
+sudo systemctl start restrict.service
+sudo journalctl -u restrict.service -f
 ```
 
 ### Docker Container Redeployment
 ```bash
 # Pull and rebuild container image
-docker build -t lucifer-morningstar:latest .
+docker build -t restrict-bot:latest .
 
 # Stop and recreate container
-docker stop lucifer-engine && docker rm lucifer-engine
-docker run -d --name lucifer-engine --restart always -p 8080:8080 --env-file .env lucifer-morningstar:latest
+docker stop restrict-engine && docker rm restrict-engine
+docker run -d --name restrict-engine --restart always -p 8080:8080 --env-file .env restrict-bot:latest
 ```
 
 ---
