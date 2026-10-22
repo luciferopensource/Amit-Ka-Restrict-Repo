@@ -146,47 +146,55 @@ def is_authorized(user_id: int) -> bool:
         return True
     return user_id in AUTH_USERS
 
-HELP_TXT = """<b>📚 BOT'S USAGE GUIDE</b>
+HELP_TXT = """<b>📚 TELEGRAM RESTRICT & FORWARDING BOT — MASTER USER MANUAL</b>
 
-▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬✘▬
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
 <blockquote expandable>
-<b>🟢 1. SINGLE & BATCH DOWNLOADS</b>
-• Send a single link to process one post.
-• Send links in a "From - To" format to process multiple files at once.
-• Type <b>all</b> to download everything to the end of the channel!
+<b>⚡ 1. SINGLE & BATCH DOWNLOADS (/dl)</b>
+• <b>Single Post:</b> Send any public or restricted message link.
+• <b>Batch Range:</b> Send <code>From - To</code> links to transfer multiple posts.
+• <b>Channel Scraping:</b> Send <code>From - all</code> to scrape all posts to the end.
 • <b>Examples:</b>
-  ├ <code>https://t.me/xxxx/1001</code>
-  ├ <code>https://t.me/c/xxxx/101 - 120</code>
-  └ <code>https://t.me/c/xxxx/1 - all</code>
+  ├ <code>https://t.me/c/1234567890/101</code>
+  ├ <code>https://t.me/c/1234567890/101 - 250</code>
+  └ <code>https://t.me/c/1234567890/1 - all</code>
+• <b>Restricted Bot Links:</b> <code>https://t.me/b/botusername/1234</code>
+• <b>Reply Mode:</b> Reply to any forwarded message or link with <code>/dl</code>.
 
-<b>👀 2. LIVE WATCHERS (AUTO-FORWARDING)</b>
-• Automatically monitor a source and forward new messages to targets.
-• Supports routing to <b>Multiple Targets</b> simultaneously!
-• Features built-in <b>Content Filtering</b> (e.g., Only Videos & Docs).
-• <b>Setup:</b> Send <code>/watch https://t.me/channel/123</code>
-• <b>Manage:</b> Use <code>/watchers</code> to view and delete mappings.
+<b>💾 2. SAVED CHANNEL MEMORY (SOURCES & DESTINATIONS)</b>
+• Store your channels permanently — no more manual channel ID lookups:
+  ├ <code>/addsourcechannel [Link/ID]</code> (or <code>/addsource</code>) - Auto-resolves title & saves source.
+  ├ <code>/adddestinationchannel [Link/ID]</code> (or <code>/adddest</code>) - Tests write access & saves destination.
+  ├ <code>/viewsourcechannels</code> (or <code>/viewsources</code>) - 10-per-page browser with 1-click Watch & delete.
+  └ <code>/viewdestinationchannels</code> (or <code>/viewdest</code>) - 10-per-page browser with channel management.
 
-<b>🤖 3. BOT CHATS & RESTRICTED CONTENT</b>
-• Send the link with <code>/b/</code>, the bot's username, and message ID.
-• <b>Format:</b> <code>https://t.me/b/botusername/4321</code>
-• Bypasses "Saving Restricted Content" limits automatically!
+<b>👀 3. 24/7 LIVE WATCHERS & SURVEILLANCE (/watch)</b>
+• Real-time channel watcher that auto-routes new messages instantaneously.
+• <b>1-Click Quick Setup:</b> Send <code>/watch</code> alone to pick from saved source channels!
+• <b>Direct Setup:</b> <code>/watch https://t.me/channel/123</code>
+• <b>Forum Topics:</b> Full support for source and destination topic IDs.
+• <b>Multi-Routing:</b> Route 1 source to multiple destinations simultaneously.
+• <b>Content Filtering:</b> Select Video, Document, Photo, Audio, Voice, Text, Animation, or Sticker.
+• <b>Typography Engine:</b> Format captions with <b>Mono</b>, <b>Bold</b>, <b>Italic</b>, or combinations (e.g. Bold+Italic, Mono+Bold), plus Original or Cleaned captions!
+• <b>Active Codex:</b> <code>/watchers</code> (or <code>/list</code>) - View and manage active surveillance routes.
+• <b>Watcher Removal:</b> <code>/removetarget &lt;src&gt; &lt;dst&gt;</code> or <code>/removesource &lt;src&gt;</code> (or <code>/unwatch</code>).
 
-<b>🛠 4. USEFUL COMMANDS</b>
-• <code>/dl</code> - Reply to a link to process it.
-• <code>/watch</code> - Setup a new live auto-forwarder.
-• <code>/watchers</code> (or <code>/list</code>) - View active watchers & filters.
-• <code>/removetarget</code> - Remove a specific destination.
-• <code>/removesource</code> (or <code>/unwatch</code>) - Stop watching a source.
-• <code>/addsourcechannel</code> (or <code>/addsource</code>) - Add & save source channel to memory (for watching/forwarding).
-• <code>/adddestinationchannel</code> (or <code>/adddest</code>) - Add & save destination channel to memory (10 buttons per page).
-• <code>/viewsourcechannels</code> (or <code>/viewsources</code>) - View, watch & delete saved source channels.
-• <code>/viewdestinationchannels</code> (or <code>/viewdest</code>) - View, inspect & delete saved destination channels.
-• <code>/setcommands</code> - Sync and refresh Telegram menu commands.
-• <code>/tasks</code> - Delete old progress and reload live progress pop-up.
-• <code>/toggledl</code> - Turn ON/OFF Background Downloading.
-• <code>/cancel</code> - Cancel ongoing tasks.
+<b>🎛 4. TASK & ENGINE DASHBOARD</b>
+• <code>/tasks</code> (or <code>/progress</code>) - Refresh real-time interactive progress message cards.
+• <code>/cancel</code> - Interactive termination menu for specific or all tasks.
+• <code>/toggledl</code> - Toggle Direct-Only vs Fallback Download/Upload mode.
+• <code>/pixel &lt;URL&gt;</code> - Generate direct high-speed CDN URLs for Pixeldrain links.
+• <code>/login</code> - Generate userbot session for private restricted channels.
+• <code>/logout</code> - Terminate userbot session and purge stored credentials.
+• <code>/setcommands</code> - Synchronize and update Telegram menu command suggestions.
+
+<b>👑 5. ADMINISTRATIVE SUITE (Admins & Sudos)</b>
+• <code>/status</code> - System hardware telemetry (CPU, RAM, Disk, Uptime, Queue).
+• <code>/botstats</code> - Detailed analytics of registered users, sessions, and database.
+• <code>/log</code> - Transmit the active application log file (<code>bot.log</code>).
+• <code>/broadcast</code> - Broadcast message to all registered bot users.
 </blockquote>
-▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬✘▬"""
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"""
 
 # ==============================================================================
 # --- DATABASE ---
@@ -463,25 +471,28 @@ class Database:
 
     async def get_all_watchers(self):
         return self.db.watchers.find({})
-        
-    async def remove_watcher(self, source_id):
-        result = await self.db.watchers.delete_many({'source_id': int(source_id)})
+
+    async def remove_watcher(self, source_id, user_id=None):
+        query = {'source_id': int(source_id)}
+        if user_id is not None:
+            query['$or'] = [{'user_id': user_id}, {'user_id': int(user_id)}, {'user_id': str(user_id)}]
+        result = await self.db.watchers.delete_many(query)
         return result.deleted_count > 0
 
-    async def remove_watcher_target(self, source_id, dest_id, source_thread=None):
+    async def remove_watcher_target(self, source_id, dest_id, source_thread=None, user_id=None):
         query = {'source_id': int(source_id)}
         if source_thread is not None:
             query['source_thread'] = int(source_thread)
-            
+        if user_id is not None:
+            query['$or'] = [{'user_id': user_id}, {'user_id': int(user_id)}, {'user_id': str(user_id)}]
+
         result = await self.db.watchers.update_one(
             query,
             {"$pull": {"targets": {"dest_id": int(dest_id)}}}
         )
-        
         doc = await self.db.watchers.find_one(query)
         if doc and not doc.get("targets"):
             await self.db.watchers.delete_one(query)
-            
         return result.modified_count > 0
 
 db = Database(DB_URI, DB_NAME)
@@ -1741,12 +1752,146 @@ async def send_help(client: Client, message: Message):
         return
     if not is_authorized(user_id):
         return await message.reply('⛔ <b>Access Denied:</b> You are not authorized to use this bot.', quote=True)
+
+    help_kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+            InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")
+        ],
+        [
+            InlineKeyboardButton("🛰️ Active Watchers", callback_data="view_watchers_menu"),
+            InlineKeyboardButton("⚙️ Live Tasks", callback_data="tasks_refresh_menu")
+        ],
+        [
+            InlineKeyboardButton("❌ Close Guide", callback_data="close_menu")
+        ]
+    ])
+
     await client.send_message(
-        message.chat.id, 
+        message.chat.id,
         text=HELP_TXT,
+        reply_markup=help_kb,
         parse_mode=enums.ParseMode.HTML,
         disable_web_page_preview=True
     )
+
+@app.on_callback_query(filters.regex(r"^tasks_refresh_menu$"))
+async def tasks_refresh_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied", show_alert=True)
+    user_tasks = ACTIVE_PROCESSES.get(user_id, {})
+    if not user_tasks:
+        return await query.answer("💤 No active tasks currently running.", show_alert=True)
+    for task_uuid, info in list(user_tasks.items()):
+        if CANCEL_FLAGS.get(task_uuid): continue
+        info["needs_refresh"] = True
+    await query.answer("✅ Active tasks refreshed!", show_alert=True)
+
+@app.on_callback_query(filters.regex(r"^view_watchers_menu$"))
+async def view_watchers_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied", show_alert=True)
+
+    q_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
+    user_watchers = await db.db.watchers.find(q_filter).to_list(length=None)
+
+    if not user_watchers:
+        empty_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛰️ Setup New Watcher", callback_data="watch_manual")],
+            [InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+             InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")],
+            [InlineKeyboardButton("🔙 Back to Help", callback_data="back_to_help"),
+             InlineKeyboardButton("❌ Close", callback_data="close_menu")]
+        ])
+        empty_text = (
+            "💤 <b>No Active Watchers Found.</b>\n\n"
+            "You don't have any channels currently being monitored in real-time.\n\n"
+            "• Use <code>/watch &lt;Link&gt;</code> to set up a 24/7 auto-forwarder.\n"
+            "• Or pick directly from your saved source channels!"
+        )
+        return await query.message.edit_text(
+            empty_text,
+            reply_markup=empty_kb,
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    text = "📊 <b>Your Active Surveillance Channels (Watchers):</b>\n\n"
+    buttons = []
+
+    for idx, w in enumerate(user_watchers, 1):
+        src_id = w['source_id']
+        src_thread = w.get('source_thread')
+        src_display = w.get('source_title') or str(src_id)
+        if src_thread:
+            src_display += f" (Topic: {src_thread})"
+
+        targets = w.get('targets', [])
+        if not targets and 'dest_id' in w:
+            targets = [{"dest_id": w['dest_id'], "dest_thread": w.get('dest_thread'), "dest_title": w.get('dest_title')}]
+
+        filters_list = w.get('allowed_types', ['All Media'])
+        fmts = w.get('text_format', [])
+        fmt_str = "+".join(fmts) if fmts else "Default"
+        delay_val = w.get('delay', 0)
+
+        text += f"<b>{idx}. 📥 {html.escape(src_display)}</b>\n"
+        text += f"   • 🆔 <code>{src_id}</code>\n"
+        text += f"   • 🎛 <b>Filters:</b> <code>{', '.join(filters_list)}</code>\n"
+        text += f"   • 📝 <b>Format:</b> <code>{fmt_str}</code>\n"
+        text += f"   • ⏱ <b>Delay:</b> <code>{delay_val}s</code>\n"
+        text += f"   • ⤵️ <b>Targets ({len(targets)}):</b>\n"
+
+        for t in targets:
+            dst_id = t['dest_id']
+            dst_display = t.get('dest_title') or str(dst_id)
+            if t.get('dest_thread'):
+                dst_display += f" (Topic: {t['dest_thread']})"
+            text += f"     └ 📤 {html.escape(dst_display)} (<code>{dst_id}</code>)\n"
+        text += "\n"
+
+        topic_param = src_thread if src_thread else 0
+        buttons.append([
+            InlineKeyboardButton(f"🗑 Remove #{idx} ({src_display[:20]})", callback_data=f"unwatch_{src_id}_{topic_param}")
+        ])
+
+    buttons.append([
+        InlineKeyboardButton("🛰️ New Watcher", callback_data="watch_manual"),
+        InlineKeyboardButton("🗑 Unwatch All", callback_data="unwatch_all")
+    ])
+    buttons.append([
+        InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+        InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")
+    ])
+    buttons.append([
+        InlineKeyboardButton("🔙 Back to Help", callback_data="back_to_help"),
+        InlineKeyboardButton("❌ Close", callback_data="close_menu")
+    ])
+
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=enums.ParseMode.HTML)
+
+@app.on_callback_query(filters.regex(r"^back_to_help$"))
+async def back_to_help_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied", show_alert=True)
+
+    help_kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+            InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")
+        ],
+        [
+            InlineKeyboardButton("🛰️ Active Watchers", callback_data="view_watchers_menu"),
+            InlineKeyboardButton("⚙️ Live Tasks", callback_data="tasks_refresh_menu")
+        ],
+        [
+            InlineKeyboardButton("❌ Close Guide", callback_data="close_menu")
+        ]
+    ])
+    await query.message.edit_text(HELP_TXT, reply_markup=help_kb, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+
 
 @app.on_message(filters.command(["toggledl", "toggledownl"]) & filters.private & ~filters.bot)
 async def toggle_dl_command(client: Client, message: Message):
@@ -2501,109 +2646,183 @@ async def watch_setup(client: Client, message: Message):
 
 @app.on_message(filters.command(["removetarget", "remove_target"]) & filters.private)
 async def remove_target_cmd(client, message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
     if len(message.command) < 3:
         return await message.reply("**Usage:** `/removetarget [source_id] [dest_id]`")
     src = message.command[1]
     dst = message.command[2]
-    
-    if await db.remove_watcher_target(src, dst):
+
+    if await db.remove_watcher_target(src, dst, user_id=user_id):
         await message.reply("✅ **Target Removed Successfully!**\nNo more messages will route here from that source.")
     else:
-        await message.reply("⚠️ Target or Source not found.")
+        await message.reply("⚠️ Target or Source not found for your account.")
 
 @app.on_message(filters.command(["removesource", "unwatch"]) & filters.private)
 async def remove_source_cmd(client, message):
+    user_id = message.from_user.id
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
     if len(message.command) < 2:
         return await message.reply("**Usage:** `/unwatch [source_id]`")
-    
+
     try:
         src = int(message.command[1])
     except ValueError:
         return await message.reply("⚠️ **Invalid format!**\nPlease pass the numerical **Source ID** (e.g. `-100123...`). You can find this ID by sending `/watchers`.")
-        
-    if await db.remove_watcher(src):
+
+    if await db.remove_watcher(src, user_id=user_id):
         await message.reply("✅ **Source Route Removed Successfully!**")
     else:
-        await message.reply("⚠️ Source not found.")
+        await message.reply("⚠️ Source not found for your account.")
 
 @app.on_message(filters.command(["watchers", "list"]) & filters.private)
 async def list_watchers(client, message):
     user_id = message.from_user.id
-    cursor = await db.get_all_watchers()
-    watchers = await cursor.to_list(length=100)
-    
-    user_watchers = [w for w in watchers if w.get('user_id') == user_id]
-    
+    if not is_authorized(user_id):
+        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+
+    show_all = False
+    if len(message.command) > 1 and message.command[1].lower() == "all" and is_admin(user_id):
+        show_all = True
+        user_watchers = await db.db.watchers.find({}).to_list(length=None)
+    else:
+        q_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
+        user_watchers = await db.db.watchers.find(q_filter).to_list(length=None)
+
     if not user_watchers:
-        return await message.reply("💤 **No active watchers found.**")
-    
-    text = "📊 **Your Multi-Source Channel Mappings:**\n\n"
-    
+        empty_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛰️ Setup New Watcher", callback_data="watch_manual")],
+            [InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+             InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")],
+            [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
+        ])
+        empty_text = (
+            "💤 <b>No Active Watchers Found.</b>\n\n"
+            "You don't have any channels currently being monitored in real-time.\n\n"
+            "• Use <code>/watch &lt;Link&gt;</code> to set up a 24/7 auto-forwarder.\n"
+            "• Or pick directly from your saved source channels using the buttons below!"
+        )
+        return await message.reply(
+            empty_text,
+            reply_markup=empty_kb,
+            quote=True
+        )
+
+    title_hdr = "📊 <b>Global Surveillance Mappings (Admin View):</b>\n\n" if show_all else "📊 <b>Your Active Surveillance Channels (Watchers):</b>\n\n"
+    text = title_hdr
+    buttons = []
+
     for idx, w in enumerate(user_watchers, 1):
         src_id = w['source_id']
+        src_thread = w.get('source_thread')
         src_display = w.get('source_title') or str(src_id)
-        if w.get('source_thread'): src_display += f" (Topic: {w['source_thread']})"
-        
+        if src_thread:
+            src_display += f" (Topic: {src_thread})"
+
         targets = w.get('targets', [])
-        if not targets and 'dest_id' in w: 
+        if not targets and 'dest_id' in w:
             targets = [{"dest_id": w['dest_id'], "dest_thread": w.get('dest_thread'), "dest_title": w.get('dest_title')}]
-            
-        text += f"**{idx}. 📥 {src_display}**\n"
-        text += f"   <code>{src_id}</code>\n"
-        text += f"   🎛 **Filters:** `{', '.join(w.get('allowed_types', ['Legacy']))}`\n"
-        
+
+        filters_list = w.get('allowed_types', ['All Media'])
         fmts = w.get('text_format', [])
-        fmt_str = ", ".join(fmts) if fmts else "Default"
-        text += f"   📝 **Format:** `{fmt_str}`\n"
-        text += f"   ⏱ **Delay:** `{w.get('delay', 0)}s`\n"
-        
-        text += f"   ⤵️ **Targets ({len(targets)}):**\n"
-        
+        fmt_str = "+".join(fmts) if fmts else "Default"
+        delay_val = w.get('delay', 0)
+        owner_info = f" | Owner: <code>{w.get('user_id')}</code>" if show_all else ""
+
+        text += f"<b>{idx}. 📥 {html.escape(src_display)}</b>{owner_info}\n"
+        text += f"   • 🆔 <code>{src_id}</code>\n"
+        text += f"   • 🎛 <b>Filters:</b> <code>{', '.join(filters_list)}</code>\n"
+        text += f"   • 📝 <b>Format:</b> <code>{fmt_str}</code>\n"
+        text += f"   • ⏱ <b>Delay:</b> <code>{delay_val}s</code>\n"
+        text += f"   • ⤵️ <b>Targets ({len(targets)}):</b>\n"
+
         for t in targets:
             dst_id = t['dest_id']
             dst_display = t.get('dest_title') or str(dst_id)
-            if t.get('dest_thread'): dst_display += f" (Topic: {t['dest_thread']})"
-            text += f"   • {dst_display} (<code>{dst_id}</code>)\n"
+            if t.get('dest_thread'):
+                dst_display += f" (Topic: {t['dest_thread']})"
+            text += f"     └ 📤 {html.escape(dst_display)} (<code>{dst_id}</code>)\n"
         text += "\n"
-        
-    await message.reply(text)
-    
+
+        topic_param = src_thread if src_thread else 0
+        buttons.append([
+            InlineKeyboardButton(f"🗑 Remove #{idx} ({src_display[:20]})", callback_data=f"unwatch_{src_id}_{topic_param}")
+        ])
+
+    buttons.append([
+        InlineKeyboardButton("🛰️ New Watcher", callback_data="watch_manual"),
+        InlineKeyboardButton("🗑 Unwatch All", callback_data="unwatch_all")
+    ])
+    buttons.append([
+        InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+        InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")
+    ])
+    buttons.append([InlineKeyboardButton("❌ Close", callback_data="close_menu")])
+
+    if len(text) > 4000:
+        chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+        for chunk in chunks[:-1]:
+            await message.reply(chunk, quote=True)
+        await message.reply(chunks[-1], reply_markup=InlineKeyboardMarkup(buttons), quote=True)
+    else:
+        await message.reply(text, reply_markup=InlineKeyboardMarkup(buttons), quote=True)
+
 @app.on_callback_query(filters.regex("^unwatch_"))
 async def unwatch_callback(client, query):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied", show_alert=True)
+
     if query.data == "unwatch_all":
-        user_id = query.from_user.id
-        result = await db.db.watchers.delete_many({'user_id': user_id})
-        await query.message.edit(f"✅ **Success!**\n\n🗑 Removed `{result.deleted_count}` active watchers.")
+        u_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
+        result = await db.db.watchers.delete_many(u_filter)
+        success_txt = f"✅ <b>Success!</b>\n\n🗑 Removed <code>{result.deleted_count}</code> active watchers for your account."
+        await query.message.edit_text(
+            success_txt,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="close_menu")]])
+        )
         return
 
     data = query.data.split("_")
-    source_id = int(data[1])
-    topic_id = int(data[2])
-    
-    query_db = {'source_id': source_id}
+    try:
+        source_id = int(data[1])
+        topic_id = int(data[2]) if len(data) > 2 else 0
+    except (ValueError, IndexError):
+        return await query.answer("⚠️ Invalid watcher request data.", show_alert=True)
+
+    u_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
+    query_db = {'source_id': source_id, **u_filter}
     if topic_id != 0:
         query_db['source_thread'] = topic_id
-        
+
     watcher = await db.db.watchers.find_one(query_db)
-    
     src_name = str(source_id)
-    dest_name = "Unknown"
-    
     if watcher:
         src_name = watcher.get('source_title') or str(source_id)
-        dest_name = watcher.get('dest_title') or str(watcher.get('dest_id'))
 
+    del_filter = {'source_id': source_id, **u_filter}
     if topic_id == 0:
-        await db.db.watchers.delete_many({'source_id': source_id, 'source_thread': None})
-        await db.db.watchers.delete_many({'source_id': source_id, 'source_thread': {'$exists': False}})
+        del_filter['$or'] = [{'source_thread': None}, {'source_thread': {'$exists': False}}]
     else:
-        await db.db.watchers.delete_many({'source_id': source_id, 'source_thread': topic_id})
-        
-    await query.message.edit(
-        f"🗑 **Active Watcher Task Removed**\n\n"
-        f"From: **{src_name}**\n"
-        f"To: **{dest_name}**"
+        del_filter['source_thread'] = topic_id
+
+    result = await db.db.watchers.delete_many(del_filter)
+    removed_txt = (
+        f"🗑 <b>Active Watcher Task Removed</b>\n\n"
+        f"• Source: <b>{html.escape(src_name)}</b> (<code>{source_id}</code>)\n"
+        f"• Deleted records: <code>{result.deleted_count}</code>\n\n"
+        "No more real-time messages will be forwarded from this source."
     )
+    await query.message.edit_text(
+        removed_txt,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 View Watchers", callback_data="view_watchers_menu")],
+            [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
+        ])
+    )
+
     
 # ==============================================================================
 # --- CORE: receive links / start tasks / processing / cancel checks ---
