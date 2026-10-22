@@ -1788,6 +1788,96 @@ async def tasks_refresh_callback(client: Client, query: CallbackQuery):
         info["needs_refresh"] = True
     await query.answer("✅ Active tasks refreshed!", show_alert=True)
 
+PAGE_SIZE_WATCHERS = 20
+
+def build_watchers_page_ui(user_watchers, page=0, is_admin_view=False):
+    total = len(user_watchers)
+    total_pages = max(1, math.ceil(total / PAGE_SIZE_WATCHERS))
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * PAGE_SIZE_WATCHERS
+    end_idx = min(start_idx + PAGE_SIZE_WATCHERS, total)
+    page_items = user_watchers[start_idx:end_idx]
+
+    title = "📊 <b>Global Surveillance Mappings (Admin View):</b>\n" if is_admin_view else "📊 <b>Your Active Surveillance Channels (Watchers):</b>\n"
+    text = title
+    text += f"📑 <b>Page:</b> <code>{page + 1}/{total_pages}</code> • Total Watchers: <code>{total}</code>\n"
+    text += "─────────────────────────\n\n"
+
+    delete_buttons = []
+    current_row = []
+
+    for rel_idx, w in enumerate(page_items):
+        idx = start_idx + rel_idx + 1
+        src_id = w['source_id']
+        src_thread = w.get('source_thread')
+        src_display = (w.get('source_title') or str(src_id))[:18]
+        th = f" [T:{src_thread}]" if src_thread else ""
+
+        targets = w.get('targets', [])
+        if not targets and 'dest_id' in w:
+            targets = [{"dest_id": w['dest_id'], "dest_thread": w.get('dest_thread'), "dest_title": w.get('dest_title')}]
+
+        filters_list = w.get('allowed_types', ['All Media'])
+        flt_str = ", ".join(filters_list)[:14]
+        fmts = w.get('text_format', [])
+        fmt_str = "+".join(fmts)[:10] if fmts else "Default"
+        delay_val = w.get('delay', 0)
+        owner_info = f" | 👤<code>{w.get('user_id')}</code>" if is_admin_view else ""
+
+        t_list = []
+        for t in targets[:2]:
+            t_name = (t.get('dest_title') or str(t['dest_id']))[:12]
+            t_th = f"[T:{t['dest_thread']}]" if t.get('dest_thread') else ""
+            t_list.append(f"{html.escape(t_name)}{t_th}")
+        if len(targets) > 2:
+            t_list.append(f"+{len(targets)-2}")
+        tgt_str = ", ".join(t_list) if t_list else "None"
+
+        text += (
+            f"<b>{idx}. 📥 {html.escape(src_display)}{th}</b> (<code>{src_id}</code>){owner_info}\n"
+            f"   └ 🎛 <code>{flt_str}</code> • 📝 <code>{fmt_str}</code> • ⏱ <code>{delay_val}s</code> ➜ 📤 {tgt_str}\n"
+        )
+
+        topic_param = src_thread if src_thread else 0
+        current_row.append(InlineKeyboardButton(f"🗑 #{idx}", callback_data=f"unwatch_{src_id}_{topic_param}_{page}"))
+        if len(current_row) == 4:
+            delete_buttons.append(current_row)
+            current_row = []
+
+    if current_row:
+        delete_buttons.append(current_row)
+
+    nav_buttons = []
+    if total_pages > 1:
+        prev_page = page - 1 if page > 0 else total_pages - 1
+        next_page = page + 1 if page < total_pages - 1 else 0
+        admin_flag = 1 if is_admin_view else 0
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"watchers_pg:{prev_page}:{admin_flag}"))
+        nav_buttons.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data=f"watchers_pg:{page}:{admin_flag}"))
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"watchers_pg:{next_page}:{admin_flag}"))
+
+    full_markup = []
+    if delete_buttons:
+        full_markup.extend(delete_buttons)
+    if nav_buttons:
+        full_markup.append(nav_buttons)
+
+    full_markup.append([
+        InlineKeyboardButton("🛰️ New Watcher", callback_data="watch_manual"),
+        InlineKeyboardButton("🗑 Unwatch All", callback_data="unwatch_all")
+    ])
+    full_markup.append([
+        InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+        InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")
+    ])
+    full_markup.append([
+        InlineKeyboardButton("🔙 Back to Help", callback_data="back_to_help"),
+        InlineKeyboardButton("❌ Close", callback_data="close_menu")
+    ])
+
+    return text, InlineKeyboardMarkup(full_markup)
+
 @app.on_callback_query(filters.regex(r"^view_watchers_menu$"))
 async def view_watchers_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
@@ -1817,59 +1907,48 @@ async def view_watchers_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
 
-    text = "📊 <b>Your Active Surveillance Channels (Watchers):</b>\n\n"
-    buttons = []
+    text, markup = build_watchers_page_ui(user_watchers, page=0, is_admin_view=False)
+    await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
-    for idx, w in enumerate(user_watchers, 1):
-        src_id = w['source_id']
-        src_thread = w.get('source_thread')
-        src_display = w.get('source_title') or str(src_id)
-        if src_thread:
-            src_display += f" (Topic: {src_thread})"
+@app.on_callback_query(filters.regex(r"^watchers_pg:(\d+)(?::(\d+))?$"))
+async def watchers_page_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied", show_alert=True)
 
-        targets = w.get('targets', [])
-        if not targets and 'dest_id' in w:
-            targets = [{"dest_id": w['dest_id'], "dest_thread": w.get('dest_thread'), "dest_title": w.get('dest_title')}]
+    page = int(query.matches[0].group(1))
+    is_admin_flag = bool(int(query.matches[0].group(2) or 0))
 
-        filters_list = w.get('allowed_types', ['All Media'])
-        fmts = w.get('text_format', [])
-        fmt_str = "+".join(fmts) if fmts else "Default"
-        delay_val = w.get('delay', 0)
+    if is_admin_flag and is_admin(user_id):
+        user_watchers = await db.db.watchers.find({}).to_list(length=None)
+    else:
+        q_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
+        user_watchers = await db.db.watchers.find(q_filter).to_list(length=None)
 
-        text += f"<b>{idx}. 📥 {html.escape(src_display)}</b>\n"
-        text += f"   • 🆔 <code>{src_id}</code>\n"
-        text += f"   • 🎛 <b>Filters:</b> <code>{', '.join(filters_list)}</code>\n"
-        text += f"   • 📝 <b>Format:</b> <code>{fmt_str}</code>\n"
-        text += f"   • ⏱ <b>Delay:</b> <code>{delay_val}s</code>\n"
-        text += f"   • ⤵️ <b>Targets ({len(targets)}):</b>\n"
-
-        for t in targets:
-            dst_id = t['dest_id']
-            dst_display = t.get('dest_title') or str(dst_id)
-            if t.get('dest_thread'):
-                dst_display += f" (Topic: {t['dest_thread']})"
-            text += f"     └ 📤 {html.escape(dst_display)} (<code>{dst_id}</code>)\n"
-        text += "\n"
-
-        topic_param = src_thread if src_thread else 0
-        buttons.append([
-            InlineKeyboardButton(f"🗑 Remove #{idx} ({src_display[:20]})", callback_data=f"unwatch_{src_id}_{topic_param}")
+    if not user_watchers:
+        empty_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛰️ Setup New Watcher", callback_data="watch_manual")],
+            [InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+             InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")],
+            [InlineKeyboardButton("🔙 Back to Help", callback_data="back_to_help"),
+             InlineKeyboardButton("❌ Close", callback_data="close_menu")]
         ])
+        empty_text = (
+            "💤 <b>No Active Watchers Found.</b>\n\n"
+            "You don't have any channels currently being monitored in real-time.\n\n"
+            "• Use <code>/watch &lt;Link&gt;</code> to set up a 24/7 auto-forwarder.\n"
+            "• Or pick directly from your saved source channels!"
+        )
+        return await query.message.edit_text(empty_text, reply_markup=empty_kb, parse_mode=enums.ParseMode.HTML)
 
-    buttons.append([
-        InlineKeyboardButton("🛰️ New Watcher", callback_data="watch_manual"),
-        InlineKeyboardButton("🗑 Unwatch All", callback_data="unwatch_all")
-    ])
-    buttons.append([
-        InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
-        InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")
-    ])
-    buttons.append([
-        InlineKeyboardButton("🔙 Back to Help", callback_data="back_to_help"),
-        InlineKeyboardButton("❌ Close", callback_data="close_menu")
-    ])
+    text, markup = build_watchers_page_ui(user_watchers, page=page, is_admin_view=is_admin_flag)
+    try:
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        if "MESSAGE_NOT_MODIFIED" not in str(e):
+            logger.error(f"Error in watchers_page_callback: {e}")
+    await query.answer()
 
-    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=enums.ParseMode.HTML)
 
 @app.on_callback_query(filters.regex(r"^back_to_help$"))
 async def back_to_help_callback(client: Client, query: CallbackQuery):
@@ -2679,95 +2758,43 @@ async def remove_source_cmd(client, message):
 
 @app.on_message(filters.command(["watchers", "list"]) & filters.private)
 async def list_watchers(client, message):
-    user_id = message.from_user.id
-    if not is_authorized(user_id):
-        return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
+    try:
+        user_id = message.from_user.id
+        if not is_authorized(user_id):
+            return await message.reply("⛔ <b>Access Denied:</b> You are not authorized to use this bot.", quote=True)
 
-    show_all = False
-    if len(message.command) > 1 and message.command[1].lower() == "all" and is_admin(user_id):
-        show_all = True
-        user_watchers = await db.db.watchers.find({}).to_list(length=None)
-    else:
-        q_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
-        user_watchers = await db.db.watchers.find(q_filter).to_list(length=None)
+        show_all = False
+        if len(message.command) > 1 and message.command[1].lower() == "all" and is_admin(user_id):
+            show_all = True
+            user_watchers = await db.db.watchers.find({}).to_list(length=None)
+        else:
+            q_filter = {"$or": [{"user_id": user_id}, {"user_id": int(user_id)}, {"user_id": str(user_id)}]}
+            user_watchers = await db.db.watchers.find(q_filter).to_list(length=None)
 
-    if not user_watchers:
-        empty_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🛰️ Setup New Watcher", callback_data="watch_manual")],
-            [InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
-             InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")],
-            [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
-        ])
-        empty_text = (
-            "💤 <b>No Active Watchers Found.</b>\n\n"
-            "You don't have any channels currently being monitored in real-time.\n\n"
-            "• Use <code>/watch &lt;Link&gt;</code> to set up a 24/7 auto-forwarder.\n"
-            "• Or pick directly from your saved source channels using the buttons below!"
-        )
-        return await message.reply(
-            empty_text,
-            reply_markup=empty_kb,
-            quote=True
-        )
+        if not user_watchers:
+            empty_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛰️ Setup New Watcher", callback_data="watch_manual")],
+                [InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
+                 InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
+            ])
+            empty_text = (
+                "💤 <b>No Active Watchers Found.</b>\n\n"
+                "You don't have any channels currently being monitored in real-time.\n\n"
+                "• Use <code>/watch &lt;Link&gt;</code> to set up a 24/7 auto-forwarder.\n"
+                "• Or pick directly from your saved source channels using the buttons below!"
+            )
+            return await message.reply(
+                empty_text,
+                reply_markup=empty_kb,
+                quote=True
+            )
 
-    title_hdr = "📊 <b>Global Surveillance Mappings (Admin View):</b>\n\n" if show_all else "📊 <b>Your Active Surveillance Channels (Watchers):</b>\n\n"
-    text = title_hdr
-    buttons = []
-
-    for idx, w in enumerate(user_watchers, 1):
-        src_id = w['source_id']
-        src_thread = w.get('source_thread')
-        src_display = w.get('source_title') or str(src_id)
-        if src_thread:
-            src_display += f" (Topic: {src_thread})"
-
-        targets = w.get('targets', [])
-        if not targets and 'dest_id' in w:
-            targets = [{"dest_id": w['dest_id'], "dest_thread": w.get('dest_thread'), "dest_title": w.get('dest_title')}]
-
-        filters_list = w.get('allowed_types', ['All Media'])
-        fmts = w.get('text_format', [])
-        fmt_str = "+".join(fmts) if fmts else "Default"
-        delay_val = w.get('delay', 0)
-        owner_info = f" | Owner: <code>{w.get('user_id')}</code>" if show_all else ""
-
-        text += f"<b>{idx}. 📥 {html.escape(src_display)}</b>{owner_info}\n"
-        text += f"   • 🆔 <code>{src_id}</code>\n"
-        text += f"   • 🎛 <b>Filters:</b> <code>{', '.join(filters_list)}</code>\n"
-        text += f"   • 📝 <b>Format:</b> <code>{fmt_str}</code>\n"
-        text += f"   • ⏱ <b>Delay:</b> <code>{delay_val}s</code>\n"
-        text += f"   • ⤵️ <b>Targets ({len(targets)}):</b>\n"
-
-        for t in targets:
-            dst_id = t['dest_id']
-            dst_display = t.get('dest_title') or str(dst_id)
-            if t.get('dest_thread'):
-                dst_display += f" (Topic: {t['dest_thread']})"
-            text += f"     └ 📤 {html.escape(dst_display)} (<code>{dst_id}</code>)\n"
-        text += "\n"
-
-        topic_param = src_thread if src_thread else 0
-        buttons.append([
-            InlineKeyboardButton(f"🗑 Remove #{idx} ({src_display[:20]})", callback_data=f"unwatch_{src_id}_{topic_param}")
-        ])
-
-    buttons.append([
-        InlineKeyboardButton("🛰️ New Watcher", callback_data="watch_manual"),
-        InlineKeyboardButton("🗑 Unwatch All", callback_data="unwatch_all")
-    ])
-    buttons.append([
-        InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
-        InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")
-    ])
-    buttons.append([InlineKeyboardButton("❌ Close", callback_data="close_menu")])
-
-    if len(text) > 4000:
-        chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
-        for chunk in chunks[:-1]:
-            await message.reply(chunk, quote=True)
-        await message.reply(chunks[-1], reply_markup=InlineKeyboardMarkup(buttons), quote=True)
-    else:
-        await message.reply(text, reply_markup=InlineKeyboardMarkup(buttons), quote=True)
+        text, markup = build_watchers_page_ui(user_watchers, page=0, is_admin_view=show_all)
+        await message.reply(text, reply_markup=markup, quote=True)
+    except Exception as e:
+        logger.error(f"Error in list_watchers: {e}", exc_info=True)
+        await message.reply(f"⚠️ <b>Error retrieving watchers:</b> <code>{html.escape(str(e))}</code>", quote=True)
 
 @app.on_callback_query(filters.regex("^unwatch_"))
 async def unwatch_callback(client, query):
@@ -2781,7 +2808,10 @@ async def unwatch_callback(client, query):
         success_txt = f"✅ <b>Success!</b>\n\n🗑 Removed <code>{result.deleted_count}</code> active watchers for your account."
         await query.message.edit_text(
             success_txt,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="close_menu")]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 View Watchers", callback_data="watchers_pg:0:0")],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
+            ])
         )
         return
 
@@ -2789,6 +2819,7 @@ async def unwatch_callback(client, query):
     try:
         source_id = int(data[1])
         topic_id = int(data[2]) if len(data) > 2 else 0
+        back_page = int(data[3]) if len(data) > 3 else 0
     except (ValueError, IndexError):
         return await query.answer("⚠️ Invalid watcher request data.", show_alert=True)
 
@@ -2818,12 +2849,12 @@ async def unwatch_callback(client, query):
     await query.message.edit_text(
         removed_txt,
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 View Watchers", callback_data="view_watchers_menu")],
+            [InlineKeyboardButton("📊 View Watchers", callback_data=f"watchers_pg:{back_page}:0")],
             [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
         ])
     )
 
-    
+
 # ==============================================================================
 # --- CORE: receive links / start tasks / processing / cancel checks ---
 # ==============================================================================
