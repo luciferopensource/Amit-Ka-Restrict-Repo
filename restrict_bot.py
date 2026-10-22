@@ -33,7 +33,8 @@ from pyrogram.errors import (
 
 from pyrogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, Message, 
-    BotCommand, BotCommandScopeDefault, BotCommandScopeChat, CallbackQuery
+    BotCommand, BotCommandScopeDefault, BotCommandScopeChat, CallbackQuery,
+    InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
 )
 from concurrent.futures import ThreadPoolExecutor
 import sys
@@ -1008,6 +1009,8 @@ async def ask_listener(client, message):
 BOT_START_TIME = time.time()
 
 ACTIVE_PROCESSES = defaultdict(dict)
+ALBUM_BUFFERS = {}
+
 
 # --- RE-BRANDING ENGINE CACHE & LOGIC ---
 USER_REPLACEMENTS = {}
@@ -5768,7 +5771,7 @@ async def build_channel_stats_ui(user_id: int, user_first_name: str = "User"):
         "⚡ <b>DELIVERY ENGINE METRICS:</b>\n"
         f"├ 📅 Today's Deliveries: <b>{today_forwards} posts</b>\n"
         f"├ 📦 Lifetime Deliveries: <b>{total_forwards} posts</b>\n"
-        f"├ 🚀 Fast-Copy Efficiency: <b>{fast_ratio}%</b> (Tag-Free Copy)\n"
+        f"├ 🚀 Fast-Copy Efficiency: <b>{fast_ratio}%</b> (Tag-Free Copy)\n        ├ 📚 Smart Album Grouping: <b>✅ Active (Fast-Copy MTProto)</b>\n"
         f"└ 🛡️ Server Bandwidth Saved: <b>~{saved_gb} GB</b> (Sevalla Friendly)\n\n"
         "💻 <b>SERVER HARDWARE TELEMETRY:</b>\n"
         f"├ 🧠 RAM Allocation: <b>{used_mb} MB / {total_mb} MB ({mem_percent}%)</b>\n"
@@ -5839,6 +5842,198 @@ async def view_rebrand_callback(client: Client, query: CallbackQuery):
     buttons.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="refresh_stats_ui")])
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
+
+# ==============================================================================
+# --- FEATURE 4: SMART MEDIA ALBUMS GROUPING (Multiple Photos/Videos) ---
+# ==============================================================================
+
+async def process_media_album(client, chat_id, media_group_id, watcher, targets):
+    album_key = f"{chat_id}_{media_group_id}"
+    # Debounce delay: allow all parts of the album (up to 10 items) to arrive
+    await asyncio.sleep(2.0)
+    
+    messages = ALBUM_BUFFERS.pop(album_key, [])
+    if not messages:
+        return
+
+    # Sort messages by message ID ascending to preserve correct media ordering
+    messages.sort(key=lambda m: m.id)
+
+    owner_id = watcher['user_id']
+    delay = watcher.get('delay', 0)
+    text_format = watcher.get('text_format', [])
+    source_name = getattr(messages[0].chat, "title", str(chat_id)) or str(chat_id)
+
+    # Extract primary caption from the album
+    original_caption = ""
+    for m in messages:
+        if m.caption:
+            original_caption = m.caption.html
+            break
+
+    clean_caption = smart_caption(original_caption)
+    if text_format:
+        if "Mono" in text_format: clean_caption = f"<code>{clean_caption}</code>"
+        if "Italic" in text_format: clean_caption = f"<i>{clean_caption}</i>"
+        if "Bold" in text_format: clean_caption = f"<b>{clean_caption}</b>"
+
+    clean_caption = await apply_user_replacements(clean_caption, owner_id)
+
+    lock_key = f"watcher_{chat_id}_{owner_id}"
+    if lock_key not in WATCHER_LOCKS:
+        WATCHER_LOCKS[lock_key] = asyncio.Lock()
+
+    async with WATCHER_LOCKS[lock_key]:
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+        msg_ids = [m.id for m in messages]
+        is_content_protected = any(
+            getattr(m, "has_protected_content", False) or getattr(m.chat, "has_protected_content", False)
+            for m in messages
+        )
+
+        owner_client = USER_CLIENTS.get(owner_id)
+        if not owner_client:
+            user_session = await db.get_session(owner_id)
+            if user_session:
+                try: owner_client = await get_user_client(owner_id, user_session)
+                except Exception: owner_client = None
+
+        fast_copy_success = False
+
+        if not is_content_protected:
+            # Mode A: Fast-Copy MTProto ForwardMessages (ZERO Bandwidth, Intact Album Layout!)
+            for t in targets:
+                dest_id = t['dest_id']
+                try: dest_id = int(dest_id)
+                except (ValueError, TypeError): pass
+                dest_thread = t.get('dest_thread')
+
+                # Try Bot MTProto ForwardMessages first
+                try:
+                    peer = await app.resolve_peer(dest_id)
+                    from_peer = await app.resolve_peer(chat_id)
+                    req = raw.functions.messages.ForwardMessages(
+                        to_peer=peer,
+                        from_peer=from_peer,
+                        id=msg_ids,
+                        random_id=[random.randint(1, 2**31) for _ in msg_ids],
+                        drop_author=True,
+                        top_msg_id=dest_thread
+                    )
+                    r = await app.invoke(req)
+                    await db.inc_forward_stats(owner_id, is_fast_copy=True, size_bytes=0)
+                    fast_copy_success = True
+                    continue
+                except Exception:
+                    pass
+
+                # Try Userbot MTProto ForwardMessages
+                if owner_client:
+                    try:
+                        peer = await owner_client.resolve_peer(dest_id)
+                        from_peer = await owner_client.resolve_peer(chat_id)
+                        req = raw.functions.messages.ForwardMessages(
+                            to_peer=peer,
+                            from_peer=from_peer,
+                            id=msg_ids,
+                            random_id=[random.randint(1, 2**31) for _ in msg_ids],
+                            drop_author=True,
+                            top_msg_id=dest_thread
+                        )
+                        r = await owner_client.invoke(req)
+                        await db.inc_forward_stats(owner_id, is_fast_copy=True, size_bytes=0)
+                        fast_copy_success = True
+                        continue
+                    except Exception:
+                        pass
+
+        if fast_copy_success:
+            return
+
+        # If Fast-copy failed (e.g. protected content channel):
+        auto_dl = await db.get_dl_status()
+        if not auto_dl:
+            alert_text = (
+                f"🚫 **Watcher Album Skipped (Download OFF)**\n"
+                f"📂 **Source:** `{source_name}` (`{chat_id}`)\n"
+                f"🆔 **Album Size:** `{len(messages)} items`\n"
+                f"*(Fast-copy failed, downloading disabled to save bandwidth!)*"
+            )
+            try: await app.send_message(owner_id, alert_text)
+            except Exception: pass
+            return
+
+        # Mode B: Clean Download & send_media_group
+        notify_text = (
+            f"⬇️ **Watcher Album Alert (Download Mode)**\n"
+            f"📂 **Source:** `{source_name}`\n"
+            f"🆔 **Album Size:** `{len(messages)} items`\n"
+            f"*(Fast-copy failed, starting album download...)*"
+        )
+        try: await app.send_message(owner_id, notify_text)
+        except Exception: pass
+
+        album_uuid = uuid.uuid4().hex
+        album_folder = Path(f"./downloads/{album_uuid}")
+        album_folder.mkdir(parents=True, exist_ok=True)
+        media_items = []
+        total_album_bytes = 0
+
+        try:
+            dl_client = owner_client if owner_client else app
+            for idx, m in enumerate(messages):
+                m_type = get_message_type(m)
+                f_size = (
+                    getattr(getattr(m, "document", None), "file_size", 0) or
+                    getattr(getattr(m, "video", None), "file_size", 0) or
+                    getattr(getattr(m, "photo", None), "file_size", 0) or
+                    getattr(getattr(m, "audio", None), "file_size", 0) or 0
+                )
+                total_album_bytes += f_size
+
+                f_path = await dl_client.download_media(m, file_name=str(album_folder / f"item_{idx}"))
+                if not f_path or not os.path.exists(f_path):
+                    continue
+
+                cap = clean_caption if idx == 0 else ""
+                pm = enums.ParseMode.HTML if cap else None
+
+                if m_type == "Photo":
+                    media_items.append(InputMediaPhoto(media=str(f_path), caption=cap, parse_mode=pm))
+                elif m_type == "Video":
+                    media_items.append(InputMediaVideo(media=str(f_path), caption=cap, parse_mode=pm))
+                elif m_type == "Document":
+                    media_items.append(InputMediaDocument(media=str(f_path), caption=cap, parse_mode=pm))
+                elif m_type == "Audio":
+                    media_items.append(InputMediaAudio(media=str(f_path), caption=cap, parse_mode=pm))
+
+            if media_items:
+                for t in targets:
+                    dest_id = t['dest_id']
+                    try: dest_id = int(dest_id)
+                    except (ValueError, TypeError): pass
+                    dest_thread = t.get('dest_thread')
+                    sent = False
+                    try:
+                        await app.send_media_group(chat_id=dest_id, media=media_items, reply_to_message_id=dest_thread)
+                        sent = True
+                    except Exception:
+                        if owner_client:
+                            try:
+                                await owner_client.send_media_group(chat_id=dest_id, media=media_items, reply_to_message_id=dest_thread)
+                                sent = True
+                            except Exception:
+                                pass
+                    if sent:
+                        await db.inc_forward_stats(owner_id, is_fast_copy=False, size_bytes=total_album_bytes)
+        except Exception as e:
+            try: await app.send_message(owner_id, f"❌ **Album forward failed:** <code>{e}</code>")
+            except Exception: pass
+        finally:
+            shutil.rmtree(album_folder, ignore_errors=True)
+
 async def process_watcher_message(client, message):
     chat_id = message.chat.id
     topic_id = getattr(message, "message_thread_id", None)
@@ -5855,6 +6050,17 @@ async def process_watcher_message(client, message):
         targets = [{"dest_id": watcher['dest_id'], "dest_thread": watcher.get('dest_thread'), "dest_title": watcher.get('dest_title')}]
         
     if not targets: 
+        return
+
+    # 📚 Smart Media Albums Grouping Interceptor
+    media_group_id = getattr(message, "media_group_id", None)
+    if media_group_id:
+        album_key = f"{chat_id}_{media_group_id}"
+        if album_key not in ALBUM_BUFFERS:
+            ALBUM_BUFFERS[album_key] = [message]
+            asyncio.create_task(process_media_album(client, chat_id, media_group_id, watcher, targets))
+        else:
+            ALBUM_BUFFERS[album_key].append(message)
         return
 
     allowed_types = watcher.get('allowed_types', ["Video", "Document"])
