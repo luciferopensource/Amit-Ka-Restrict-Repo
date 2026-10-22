@@ -1859,7 +1859,7 @@ def get_message_type(msg: Message):
 # --- HANDLERS ---
 # ==============================================================================
 
-async def test_destination_access(client: Client, chat_id, thread_id=None):
+async def test_destination_access(client: Client, chat_id, thread_id=None, user_id=None):
     try:
         test_msg = await client.send_message(
             chat_id=chat_id,
@@ -1869,6 +1869,18 @@ async def test_destination_access(client: Client, chat_id, thread_id=None):
         await test_msg.delete()
         return True, "Success"
     except Exception as e:
+        if user_id and user_id in USER_CLIENTS and getattr(USER_CLIENTS[user_id], "is_connected", False):
+            try:
+                u_client = USER_CLIENTS[user_id]
+                test_msg = await u_client.send_message(
+                    chat_id=chat_id,
+                    text="🔄 **Testing Destination Accessibility...**\n*(This message will self-destruct)*",
+                    reply_to_message_id=thread_id
+                )
+                await test_msg.delete()
+                return True, "Success"
+            except Exception as ue:
+                return False, f"Bot error: {e} | User Client error: {ue}"
         return False, str(e)
         
 @app.on_message(filters.command(["start"]) & filters.private & ~filters.bot)
@@ -3107,7 +3119,7 @@ async def unwatch_callback(client, query):
 # --- CORE: receive links / start tasks / processing / cancel checks ---
 # ==============================================================================
 
-@app.on_message((filters.text | filters.caption) & filters.private & ~filters.regex(r"^/") & ~filters.command(["dl", "start", "help", "cancel", "botstats", "login", "logout", "broadcast", "status", "watch", "unwatch", "watchers", "removetarget", "removesource", "log", "tasks", "progress", "toggledl", "addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel", "viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels", "setcommands", "sync_commands", "addsourcechannel", "addsource", "savesourcechannel", "savesource", "adddestinationchannel", "adddestination", "adddestchannel", "adddest", "savedestchannel", "savedestination", "viewsourcechannels", "viewsources", "viewsource", "sourcechannels", "sources", "viewdestinationchannels", "viewdestchannels", "viewdest", "viewdestination", "destchannels", "destinations", "replace", "rebrand", "replacements", "clearreplace", "clearreplacements", "setthumb", "setthumbnail", "viewthumb", "mythumb", "thumbnail", "delthumb", "clearthumb", "deletethumb", "channelstats", "stats", "analytics", "mywatchers", "kickuser", "logoutuser", "kicksession"]))
+@app.on_message((filters.text | filters.caption | filters.forwarded) & filters.private & ~filters.regex(r"^/") & ~filters.command(["dl", "start", "help", "cancel", "botstats", "login", "logout", "broadcast", "status", "watch", "unwatch", "watchers", "removetarget", "removesource", "log", "tasks", "progress", "toggledl", "addchannel", "addsavedchannel", "savechannel", "add_channel", "save_channel", "viewsavedchannels", "viewsaved", "savedchannels", "channels", "saved", "saved_channels", "setcommands", "sync_commands", "addsourcechannel", "addsource", "savesourcechannel", "savesource", "adddestinationchannel", "adddestination", "adddestchannel", "adddest", "savedestchannel", "savedestination", "viewsourcechannels", "viewsources", "viewsource", "sourcechannels", "sources", "viewdestinationchannels", "viewdestchannels", "viewdest", "viewdestination", "destchannels", "destinations", "replace", "rebrand", "replacements", "clearreplace", "clearreplacements", "setthumb", "setthumbnail", "viewthumb", "mythumb", "thumbnail", "delthumb", "clearthumb", "deletethumb", "channelstats", "stats", "analytics", "mywatchers", "kickuser", "logoutuser", "kicksession"]))
 async def save(client: Client, message: Message):
     user_id = message.from_user.id
     if not is_authorized(user_id):
@@ -3124,15 +3136,29 @@ async def save(client: Client, message: Message):
         else:
             prompt_msg_id = pending_val
             ch_type = "dest"
-        await process_add_channel_submission(client, message, message.text, prompt_msg_id=prompt_msg_id, channel_type=ch_type)
+        raw_submission = message.text or message.caption or ""
+        if not raw_submission and getattr(message, "forward_from_chat", None):
+            raw_submission = str(message.forward_from_chat.id)
+        await process_add_channel_submission(client, message, raw_submission, prompt_msg_id=prompt_msg_id, channel_type=ch_type)
         return
     if user_id in PENDING_TASKS:
-        if PENDING_TASKS[user_id].get("status") == "waiting_id":
-            await process_custom_destination(client, message)
-            return
-        if PENDING_TASKS[user_id].get("status") == "waiting_speed":
+        task_status = PENDING_TASKS[user_id].get("status")
+        if task_status == "waiting_speed":
             await process_speed_input(client, message)
             return
+        if task_status in ["waiting_id", "waiting_channel_select", "waiting_choice"]:
+            is_dest = False
+            if getattr(message, "forward_from_chat", None) or getattr(message, "forward_from", None):
+                is_dest = True
+            else:
+                raw_txt = (message.text or message.caption or "").strip()
+                if task_status == "waiting_id" and raw_txt and not raw_txt.startswith("/"):
+                    is_dest = True
+                elif raw_txt:
+                    is_dest = is_destination_channel_input(raw_txt)
+            if is_dest:
+                await process_custom_destination(client, message)
+                return
 
     link_text = message.text or message.caption
     if not link_text or "https://t.me/" not in link_text:
@@ -3270,6 +3296,57 @@ def get_channel_emoji(index: int, title: str) -> str:
     if any(k in title_lower for k in ["fast", "speed", "express"]): return "⚡"
     if any(k in title_lower for k in ["series", "show", "anime"]): return "🍿"
     return CHANNEL_EMOJIS[(index - 1) % len(CHANNEL_EMOJIS)]
+
+def is_destination_channel_input(raw_text: str) -> bool:
+    if not raw_text or raw_text.startswith("/"):
+        return False
+    text = raw_text.strip()
+    
+    # 1. Obvious source batch links (ranges, -all, etc.) are NEVER destinations
+    if "-all" in text.lower() or re.search(r"/\d+-\d+", text):
+        return False
+
+    # 2. Telegram invite links are destinations
+    if "t.me/+" in text or "t.me/joinchat/" in text:
+        return True
+
+    words = text.split()
+    first_token = words[0]
+
+    # 3. Numeric ID: -100..., -..., or pure numbers >= 5 digits, or chat_id/topic_id
+    if re.match(r"^-?\d+(?:/\d+)?$", first_token):
+        clean = first_token.split("/")[0].lstrip("-")
+        if clean.isdigit() and (len(clean) >= 5 or first_token.startswith("-100")):
+            return True
+
+    # 4. Telegram @username
+    if first_token.startswith("@") and len(first_token) > 1:
+        return True
+
+    # 5. Public channel link without message ID: https://t.me/mychannel or t.me/mychannel
+    if "t.me/" in first_token:
+        if "t.me/c/" in first_token:
+            parts = first_token.split("t.me/c/")[1].strip("/").split("/")
+            if len(parts) == 1 and parts[0].isdigit():
+                return True
+            return False
+        else:
+            parts = first_token.split("t.me/")[1].strip("/").split("/")
+            if len(parts) == 1 and parts[0] and not parts[0].isdigit():
+                return True
+            return False
+
+    # 6. Single-token username without @ (must be exactly 1 token, e.g. "my_dest_channel")
+    if len(words) == 1 and re.match(r"^[a-zA-Z][a-zA-Z0-9_]{3,31}$", first_token):
+        common_words = {
+            "http", "https", "cancel", "help", "start", "speed", "login", "logout",
+            "hello", "thanks", "thank", "please", "admin", "owner", "status", "about",
+            "watch", "ready", "close", "tasks", "stats", "reset", "clear", "error"
+        }
+        if first_token.lower() not in common_words:
+            return True
+
+    return False
 
 def parse_channel_input(raw_text: str):
     text = (raw_text or "").strip()
@@ -3712,77 +3789,57 @@ async def filter_start_cb(client, query):
         await start_task_final(client, query.message, task_data, delay, user_id=user_id)
 
 async def process_custom_destination(client: Client, message: Message):
-    user_id = message.from_user.id
-    text = message.text.strip()
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id: return
     try:
-        if message.reply_to_message and message.reply_to_message.from_user.is_self:
+        if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.is_self:
             await message.reply_to_message.delete()
     except Exception:
         pass
     try:
         dest_chat_id = None
         dest_thread_id = None
+        custom_title = None
         
-        if "t.me/c/" in text:
-            parts = text.split("t.me/c/")[1].split("/")
-            chat_part = parts[0].strip()
-            dest_chat_id = int(f"-100{chat_part}") if not chat_part.startswith("-100") else int(chat_part)
-            if len(parts) > 1 and parts[1].strip().isdigit():
-                dest_thread_id = int(parts[1].strip())
-        elif "t.me/" in text:
-            parts = text.split("t.me/")[1].split("/")
-            dest_chat_id = parts[0].strip()
-            if len(parts) > 1 and parts[1].strip().isdigit():
-                dest_thread_id = int(parts[1].strip())
-        elif "/" in text:
-            parts = text.split("/")
-            chat_part = parts[0].strip()
-            clean_part = chat_part.lstrip('-')
-            if clean_part.isdigit():
-                raw_num = int(chat_part)
-                if raw_num > 0 and raw_num > 10000000:
-                    dest_chat_id = int(f"-100{raw_num}")
-                elif not str(raw_num).startswith("-100"):
-                    dest_chat_id = int(f"-100{abs(raw_num)}")
-                else:
-                    dest_chat_id = raw_num
-            else:
-                dest_chat_id = chat_part
-            if len(parts) > 1 and parts[1].strip().isdigit():
-                dest_thread_id = int(parts[1].strip())
+        # 1. Forwarded message recognition (e.g. user forwarded a post from the destination channel)
+        if getattr(message, "forward_from_chat", None):
+            dest_chat_id = message.forward_from_chat.id
+            custom_title = message.forward_from_chat.title
+            dest_thread_id = getattr(message, "message_thread_id", None)
+        elif getattr(message, "forward_from", None):
+            dest_chat_id = message.forward_from.id
+            custom_title = getattr(message.forward_from, "first_name", None)
         else:
-            clean_num = text.lstrip('-')
-            if clean_num.isdigit():
-                raw_num = int(text)
-                if raw_num > 0 and raw_num > 10000000:
-                    dest_chat_id = int(f"-100{raw_num}")
-                elif not str(raw_num).startswith("-100"):
-                    dest_chat_id = int(f"-100{abs(raw_num)}")
-                else:
-                    dest_chat_id = raw_num
-            else:
-                dest_chat_id = text
+            text = (message.text or message.caption or "").strip()
+            if not text:
+                await message.reply("❌ Please send a valid channel ID, link, or forward a message from the destination channel.", quote=True)
+                return
+            dest_chat_id, dest_thread_id, custom_title = parse_channel_input(text)
             
+        if not dest_chat_id:
+            await message.reply("❌ Invalid format. Please send a valid channel ID (e.g. `-100...`), @username, link, or forward a message from the channel.", quote=True)
+            return
+
         try:
             try:
                 chat = await client.get_chat(dest_chat_id)
             except Exception as e_bot:
-                if user_id in USER_CLIENTS and USER_CLIENTS[user_id].is_connected:
+                if user_id in USER_CLIENTS and getattr(USER_CLIENTS[user_id], "is_connected", False):
                     chat = await USER_CLIENTS[user_id].get_chat(dest_chat_id)
                 else:
                     raise e_bot
-            title = chat.title or "Target Chat"
+            title = custom_title or chat.title or getattr(chat, "first_name", None) or f"Chat {dest_chat_id}"
             dest_chat_id = chat.id 
             
             if not getattr(chat, "is_forum", False):
                 dest_thread_id = None
                 
         except Exception as e:
-            await message.reply(f"❌ **Invalid Chat ID/Link** or I am not an admin there.\nError: `{e}`")
+            await message.reply(f"❌ **Invalid Chat ID/Link** or I am not an admin there.\nError: `{e}`", quote=True)
             return
             
         wait_msg = await message.reply("🔄 **Testing destination access...**", quote=True)
-        success, error_msg = await test_destination_access(client, dest_chat_id, dest_thread_id)
+        success, error_msg = await test_destination_access(client, dest_chat_id, dest_thread_id, user_id=user_id)
         
         if not success:
             await wait_msg.edit(f"❌ **Setup Failed! Cannot write to destination.**\n\nPlease ensure I am an admin in `{title}` with posting permissions.\n**Error:** `{error_msg}`")
@@ -3795,7 +3852,7 @@ async def process_custom_destination(client: Client, message: Message):
         PENDING_TASKS[user_id]["dest_title"] = title
         PENDING_TASKS[user_id]["status"] = "waiting_speed"
 
-        # Auto-save channel to user memory
+        # Auto-save channel to user memory so it's remembered!
         try:
             await db.save_channel(
                 user_id=user_id,
@@ -3809,7 +3866,7 @@ async def process_custom_destination(client: Client, message: Message):
 
         await ask_for_speed(message)
     except Exception as e:
-        await message.reply(f"❌ Invalid format. Please send a valid link or ID.\nError: `{e}`")
+        await message.reply(f"❌ Invalid format. Please send a valid link or ID.\nError: `{e}`", quote=True)
 
 async def ask_for_speed(message: Message):
     buttons = [
@@ -4268,6 +4325,14 @@ async def process_add_channel_submission(client: Client, message: Message, raw_i
     is_source = (ch_type == "source")
     type_label = "SOURCE" if is_source else "DESTINATION"
 
+    if not target_chat_id and getattr(message, "forward_from_chat", None):
+        target_chat_id = message.forward_from_chat.id
+        custom_title = message.forward_from_chat.title
+        dest_thread_id = getattr(message, "message_thread_id", None)
+    elif not target_chat_id and getattr(message, "forward_from", None):
+        target_chat_id = message.forward_from.id
+        custom_title = getattr(message.forward_from, "first_name", None)
+
     if not target_chat_id:
         cmd_example = "/addsourcechannel" if is_source else "/adddestinationchannel"
         return await message.reply(
@@ -4308,7 +4373,7 @@ async def process_add_channel_submission(client: Client, message: Message, raw_i
     has_access = True
     admin_note = ""
     if not is_source:
-        has_access, error_msg = await test_destination_access(client, target_chat_id, dest_thread_id)
+        has_access, error_msg = await test_destination_access(client, target_chat_id, dest_thread_id, user_id=user_id)
         admin_note = (
             "\n🤖 <b>Bot Status:</b> ✅ Administrator verified with post rights."
             if has_access
@@ -4341,6 +4406,12 @@ async def process_add_channel_submission(client: Client, message: Message, raw_i
         else "<i>This channel will now appear in your saved destination list (10 buttons per page) during forwarding setups!</i>"
     )
 
+    proceed_prompt = (
+        "\n\n👉 <b>Active Task:</b> Would you like to proceed with this channel now?"
+        if (user_id in PENDING_TASKS)
+        else ""
+    )
+
     success_text = (
         f"🎉 <b>{type_label} CHANNEL SAVED TO MEMORY!</b>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
@@ -4351,21 +4422,38 @@ async def process_add_channel_submission(client: Client, message: Message, raw_i
         + f"\n📊 <b>Total {type_label.capitalize()} Channels in Memory:</b> <code>{total_saved}</code>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
         + help_note
+        + proceed_prompt
     )
 
     action_buttons = []
-    if is_source:
-        action_buttons.append([InlineKeyboardButton("👀 Start Watching Now", callback_data=f"ch_watch_sel:{target_chat_id}:{dest_thread_id or 0}")])
-        action_buttons.append([
-            InlineKeyboardButton("📋 View Source Channels", callback_data="ch_page:1:source_view:source"),
-            InlineKeyboardButton("➕ Add Another", callback_data="prompt_add_source")
-        ])
+    if user_id in PENDING_TASKS:
+        short_t = (final_title[:20] + "…") if len(final_title) > 20 else final_title
+        if is_source:
+            action_buttons.append([InlineKeyboardButton(f"🚀 Start Watching {short_t}", callback_data=f"ch_watch_sel:{target_chat_id}:{dest_thread_id or 0}")])
+            action_buttons.append([
+                InlineKeyboardButton("🔙 Back to Source Channels", callback_data="ch_page:1:watch_select:source"),
+                InlineKeyboardButton("➕ Add Another Channel", callback_data="prompt_add_source")
+            ])
+        else:
+            action_buttons.append([InlineKeyboardButton(f"🚀 Proceed with {short_t}", callback_data=f"ch_sel:{target_chat_id}:{dest_thread_id or 0}")])
+            action_buttons.append([
+                InlineKeyboardButton("🔙 Back to Select Channel", callback_data="dest_custom"),
+                InlineKeyboardButton("➕ Add Another Channel", callback_data="prompt_add_dest")
+            ])
+        action_buttons.append([InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_setup")])
     else:
-        action_buttons.append([
-            InlineKeyboardButton("📑 View Destination Channels", callback_data="ch_page:1:dest_view:dest"),
-            InlineKeyboardButton("➕ Add Another", callback_data="prompt_add_dest")
-        ])
-    action_buttons.append([InlineKeyboardButton("❌ Close", callback_data="ch_close")])
+        if is_source:
+            action_buttons.append([InlineKeyboardButton("👀 Start Watching Now", callback_data=f"ch_watch_sel:{target_chat_id}:{dest_thread_id or 0}")])
+            action_buttons.append([
+                InlineKeyboardButton("📋 View Source Channels", callback_data="ch_page:1:source_view:source"),
+                InlineKeyboardButton("➕ Add Another", callback_data="prompt_add_source")
+            ])
+        else:
+            action_buttons.append([
+                InlineKeyboardButton("📑 View Destination Channels", callback_data="ch_page:1:dest_view:dest"),
+                InlineKeyboardButton("➕ Add Another", callback_data="prompt_add_dest")
+            ])
+        action_buttons.append([InlineKeyboardButton("❌ Close", callback_data="ch_close")])
 
     await status_msg.edit(success_text, reply_markup=InlineKeyboardMarkup(action_buttons))
 
@@ -4501,9 +4589,11 @@ async def prompt_add_source_callback(client: Client, query: CallbackQuery):
         "• <code>@channelusername</code>\n\n"
         "💡 <i>The bot will automatically recognize the channel's real name from Telegram!</i>"
     )
+    back_cb = "ch_page:1:watch_select:source" if user_id in PENDING_TASKS else "ch_page:1:source_view:source"
+    cancel_cb = "cancel_setup" if user_id in PENDING_TASKS else "cancel_add_channel"
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Back to Source Channels", callback_data="ch_page:1:source_view:source")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
+        [InlineKeyboardButton("🔙 Back to Source Channels", callback_data=back_cb)],
+        [InlineKeyboardButton("❌ Cancel", callback_data=cancel_cb)]
     ])
     try:
         await query.message.edit_text(prompt_text, reply_markup=markup)
@@ -4529,9 +4619,11 @@ async def prompt_add_dest_callback(client: Client, query: CallbackQuery):
         "• <code>@channelusername</code>\n\n"
         "💡 <i>The bot will automatically recognize the channel's real name from Telegram!</i>"
     )
+    back_cb = "dest_custom" if user_id in PENDING_TASKS else "ch_page:1:dest_view:dest"
+    cancel_cb = "cancel_setup" if user_id in PENDING_TASKS else "cancel_add_channel"
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Back to Destination Channels", callback_data="ch_page:1:dest_view:dest")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_add_channel")]
+        [InlineKeyboardButton("🔙 Back to Destination Selection", callback_data=back_cb)],
+        [InlineKeyboardButton("❌ Cancel", callback_data=cancel_cb)]
     ])
     try:
         await query.message.edit_text(prompt_text, reply_markup=markup)
