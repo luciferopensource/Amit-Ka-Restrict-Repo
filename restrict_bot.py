@@ -4,6 +4,9 @@ import random
 import psutil
 import time
 import asyncio
+import logging
+logger = logging.getLogger('RestrictBot')
+import traceback
 import math
 import html
 # === Python 3.12+ Event Loop Compatibility ===
@@ -27,7 +30,7 @@ from pyrogram import Client, filters, enums, idle, raw
 from pyrogram.errors import (
     FloodWait, UserIsBlocked, InputUserDeactivated, UserAlreadyParticipant,
     InviteHashExpired, UsernameNotOccupied, FileReferenceExpired, UserNotParticipant,
-    ApiIdInvalid, PhoneNumberInvalid, PhoneCodeInvalid, PhoneCodeExpired,
+    ApiIdInvalid, PhoneNumberInvalid, PhoneNumberBanned, PhoneNumberUnoccupied, PhoneCodeInvalid, PhoneCodeExpired,
     SessionPasswordNeeded, PasswordHashInvalid, PeerIdInvalid, AuthKeyUnregistered, UserDeactivated
 )
 
@@ -527,6 +530,132 @@ class Database:
         if user:
             return user.get('api_hash')
         return None
+
+
+    async def get_user_accounts(self, id):
+        user = await self.col.find_one({'id': int(id)})
+        if not user:
+            return []
+        accounts = user.get('accounts') or []
+        if not accounts and user.get('session'):
+            legacy_acc = {
+                'account_id': f"acc_{id}_main",
+                'phone': "Legacy Primary",
+                'first_name': user.get('name') or "Primary Account",
+                'username': "",
+                'user_id': int(id),
+                'session': user.get('session'),
+                'api_id': user.get('api_id'),
+                'api_hash': user.get('api_hash'),
+                'added_at': datetime.datetime.now().isoformat(),
+                'is_active': True
+            }
+            accounts = [legacy_acc]
+            await self.col.update_one(
+                {'id': int(id)},
+                {'$set': {'accounts': accounts, 'active_account_id': legacy_acc['account_id']}}
+            )
+        return accounts
+
+    async def add_user_account(self, id, account_data, set_as_active=True):
+        user = await self.col.find_one({'id': int(id)})
+        if not user:
+            await self.add_user(id, account_data.get('first_name', 'User'))
+            user = await self.col.find_one({'id': int(id)}) or {}
+            
+        accounts = user.get('accounts') or []
+        if not accounts and user.get('session'):
+            accounts.append({
+                'account_id': f"acc_{id}_main",
+                'phone': "Legacy Primary",
+                'first_name': user.get('name') or "Primary Account",
+                'username': "",
+                'user_id': int(id),
+                'session': user.get('session'),
+                'api_id': user.get('api_id'),
+                'api_hash': user.get('api_hash'),
+                'added_at': datetime.datetime.now().isoformat(),
+                'is_active': False
+            })
+
+        acc_id = str(account_data.get('account_id') or account_data.get('user_id') or uuid.uuid4().hex[:8])
+        account_data['account_id'] = acc_id
+        account_data['added_at'] = datetime.datetime.now().isoformat()
+        
+        accounts = [
+            a for a in accounts 
+            if str(a.get('account_id')) != str(acc_id) and (not account_data.get('phone') or a.get('phone') != account_data.get('phone'))
+        ]
+        
+        if set_as_active or len(accounts) == 0:
+            for a in accounts:
+                a['is_active'] = False
+            account_data['is_active'] = True
+            active_acc = account_data
+        else:
+            account_data['is_active'] = False
+            active_acc = next((a for a in accounts if a.get('is_active')), account_data)
+
+        accounts.append(account_data)
+        
+        update_fields = {
+            'accounts': accounts,
+            'active_account_id': active_acc['account_id'],
+            'session': active_acc['session'],
+            'api_id': active_acc.get('api_id'),
+            'api_hash': active_acc.get('api_hash')
+        }
+        await self.col.update_one({'id': int(id)}, {'$set': update_fields})
+        return acc_id
+
+    async def switch_active_account(self, id, account_id):
+        accounts = await self.get_user_accounts(id)
+        target_acc = None
+        for a in accounts:
+            if str(a.get('account_id')) == str(account_id):
+                a['is_active'] = True
+                target_acc = a
+            else:
+                a['is_active'] = False
+                
+        if not target_acc:
+            return None
+            
+        update_fields = {
+            'accounts': accounts,
+            'active_account_id': target_acc['account_id'],
+            'session': target_acc['session'],
+            'api_id': target_acc.get('api_id'),
+            'api_hash': target_acc.get('api_hash')
+        }
+        await self.col.update_one({'id': int(id)}, {'$set': update_fields})
+        return target_acc
+
+    async def delete_user_account(self, id, account_id):
+        accounts = await self.get_user_accounts(id)
+        remaining = [a for a in accounts if str(a.get('account_id')) != str(account_id)]
+        new_active = None
+        if remaining:
+            new_active = next((a for a in remaining if a.get('is_active')), remaining[0])
+            for a in remaining:
+                a['is_active'] = (str(a.get('account_id')) == str(new_active.get('account_id')))
+            update_fields = {
+                'accounts': remaining,
+                'active_account_id': new_active['account_id'],
+                'session': new_active['session'],
+                'api_id': new_active.get('api_id'),
+                'api_hash': new_active.get('api_hash')
+            }
+        else:
+            update_fields = {
+                'accounts': [],
+                'active_account_id': None,
+                'session': None,
+                'api_id': None,
+                'api_hash': None
+            }
+        await self.col.update_one({'id': int(id)}, {'$set': update_fields})
+        return remaining, new_active
 
     async def total_session_users_count(self):
         count = await self.col.count_documents({"session": {"$ne": None}})
@@ -1099,6 +1228,7 @@ SESSION_STRING_SIZE = 351
 MAX_CONCURRENT_TASKS_PER_USER = int(os.environ.get("MAX_TASKS_PER_USER", "3"))
 
 USER_CLIENTS = {} 
+PENDING_LOGINS = {}
 
 ALL_MSG_TYPES = ["Video", "Document", "Text", "Audio", "Photo", "Voice", "Animation", "Sticker"]
 
@@ -2586,6 +2716,74 @@ async def bot_stats_page_callback(client: Client, query: CallbackQuery):
         await query.answer(f"Page {page} loaded ⚡")
     except Exception:
         await query.answer("Stats are up to date! 🔄")
+async def force_logout_user(target_id: int):
+    target_id = int(target_id)
+    if target_id in USER_CLIENTS:
+        try:
+            await USER_CLIENTS[target_id].stop()
+        except Exception:
+            pass
+        USER_CLIENTS.pop(target_id, None)
+
+    await db.set_session(target_id, session=None)
+    await db.set_api_id(target_id, api_id=None)
+    await db.set_api_hash(target_id, api_hash=None)
+    try:
+        await db.col.update_one(
+            {'id': target_id},
+            {'$set': {'accounts': [], 'active_account_id': None, 'session': None, 'api_id': None, 'api_hash': None}}
+        )
+    except Exception:
+        pass
+
+    user_procs = ACTIVE_PROCESSES.get(target_id, {})
+    for tid in list(user_procs.keys()):
+        CANCEL_FLAGS[tid] = True
+    ACTIVE_PROCESSES.pop(target_id, None)
+
+async def get_user_client(user_id: int, session_string: str = None) -> Client | None:
+    if user_id in USER_CLIENTS:
+        client = USER_CLIENTS[user_id]
+        if getattr(client, "is_connected", False):
+            return client
+        try:
+            await client.start()
+            return client
+        except Exception:
+            try: await client.stop()
+            except Exception: pass
+            USER_CLIENTS.pop(user_id, None)
+
+    session_str = session_string or await db.get_session(user_id)
+    if not session_str:
+        return None
+
+    u_api = await db.get_api_id(user_id) or API_ID
+    u_hash = await db.get_api_hash(user_id) or API_HASH
+
+    new_client = Client(
+        f"userbot_{user_id}_{int(time.time())}",
+        session_string=session_str,
+        api_id=u_api,
+        api_hash=u_hash,
+        device_model="Telegram Desktop",
+        system_version="Windows 11 x64",
+        app_version="5.6.1 x64",
+        lang_code="en",
+        workers=4,
+        ipv6=False,
+        in_memory=True
+    )
+    if "user_watcher_handler" in globals():
+        new_client.add_handler(MessageHandler(globals()["user_watcher_handler"]))
+    try:
+        await new_client.start()
+        USER_CLIENTS[user_id] = new_client
+        return new_client
+    except Exception as e:
+        print(f"Failed to start user client for {user_id}: {e}")
+        return None
+
 @app.on_callback_query(filters.regex(r"^kick_u:(\d+):(\d+)"))
 async def kick_user_callback(client: Client, query: CallbackQuery):
     admin_id = query.from_user.id if query.from_user else 0
@@ -2641,183 +2839,594 @@ async def kick_user_command(client: Client, message: Message):
 # ==============================================================================
 
 @app.on_message(filters.private & ~filters.forwarded & filters.command(["logout"]))
-async def logout(client, message):
-    user_id = message.from_user.id
+async def logout(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
     if not is_authorized(user_id):
         return await message.reply('⛔ <b>Access Denied:</b> You are not authorized to use this bot.', quote=True)
-    if not await db.is_user_exist(user_id):
-        return await message.reply_text("You are not logged in.")
 
-    status_msg = await message.reply("📡 **Connecting to Telegram to terminate session...**")
-
-    session_string = await db.get_session(user_id)
-    api_id = await db.get_api_id(user_id)
-    api_hash = await db.get_api_hash(user_id)
-
-    if session_string:
-        user_client = None
-        try:
-            use_api_id = int(api_id) if api_id else API_ID
-            use_api_hash = api_hash if api_hash else API_HASH
-            
-            user_client = Client(
-                f"logout_{user_id}_{int(time.time())}", 
-                session_string=session_string, 
-                api_id=use_api_id, 
-                api_hash=use_api_hash,
-                no_updates=True,
-                in_memory=True
-            )
-            
-            await user_client.connect()
-            try:
-                await user_client.log_out()
-                await status_msg.edit("✅ **Session successfully removed from Telegram Devices.**")
-            except Exception as e:
-                if "terminated" in str(e) or "Connection" in str(e):
-                    await status_msg.edit("✅ **Session terminated successfully.**")
-                else:
-                    raise e
-            
-        except AuthKeyUnregistered:
-            await status_msg.edit("⚠️ **Session was already invalid.** Cleaning local database...")
-        except Exception as e:
-            print(f"Remote logout warning: {e}")
-            await status_msg.edit("✅ **Local session cleared.** (Remote session might already be gone)")
-        finally:
-            try:
-                if user_client and user_client.is_connected:
-                    await user_client.disconnect()
+    accounts = await db.get_user_accounts(user_id)
+    if not accounts:
+        if user_id in USER_CLIENTS:
+            try: await USER_CLIENTS[user_id].stop()
             except Exception: pass
+            USER_CLIENTS.pop(user_id, None)
+        await db.set_session(user_id, session=None)
+        await db.set_api_id(user_id, api_id=None)
+        await db.set_api_hash(user_id, api_hash=None)
+        return await message.reply("ℹ️ <b>You are not currently logged in.</b>", quote=True)
 
+    if len(accounts) > 1:
+        active_acc = next((a for a in accounts if a.get('is_active')), accounts[0])
+        logout_text = (
+            "🚨 <b>Logout & Account Management</b>\n\n"
+            f"You currently have <b>{len(accounts)}</b> saved account(s).\n"
+            f"🟢 <b>Active Account:</b> <b>{html.escape(active_acc.get('first_name', 'User'))}</b> (<code>{active_acc.get('phone', 'N/A')}</code>)\n\n"
+            "Choose an action:"
+        )
+        logout_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚪 Logout Active Account Only", callback_data="logout_act_confirm")],
+            [InlineKeyboardButton("🔥 Logout All Saved Accounts", callback_data="logout_all_confirm")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="acc_close")]
+        ])
+        return await message.reply(logout_text, reply_markup=logout_kb, quote=True)
+
+    status_msg = await message.reply("📡 <b>Connecting to Telegram to terminate session...</b>", quote=True)
     if user_id in USER_CLIENTS:
-        try:
-            await USER_CLIENTS[user_id].stop()
-        except Exception:
-            pass
-        del USER_CLIENTS[user_id]
+        try: await USER_CLIENTS[user_id].stop()
+        except Exception: pass
+        USER_CLIENTS.pop(user_id, None)
 
     await db.set_session(user_id, session=None)
     await db.set_api_id(user_id, api_id=None)
     await db.set_api_hash(user_id, api_hash=None)
-    
-    await message.reply("**Logout Complete** ♦\n(You are now disconnected)")
+    await db.col.update_one({'id': int(user_id)}, {'$set': {'accounts': [], 'active_account_id': None}})
+    await status_msg.edit("✅ <b>Logout Complete!</b> ♦\nYour session has been safely disconnected and removed.")
+
+async def build_accounts_ui(user_id: int):
+    accounts = await db.get_user_accounts(user_id)
+    if not accounts:
+        text = (
+            "👥 <b>Multi-Account Manager</b>\n\n"
+            "❌ <i>No Telegram accounts currently connected.</i>\n\n"
+            "Connecting an account allows the bot to forward restricted content, download protected files, and run live watchers."
+        )
+        buttons = [
+            [InlineKeyboardButton("🔑 Add Account (String Session - Zero SMS)", callback_data="login_choice_string")],
+            [InlineKeyboardButton("📱 Add Account (Phone Number + OTP)", callback_data="login_choice_phone")],
+            [InlineKeyboardButton("❌ Close", callback_data="acc_close")]
+        ]
+        return text, InlineKeyboardMarkup(buttons)
+
+    active_acc = next((a for a in accounts if a.get('is_active')), accounts[0])
+    lines = [
+        "👥 <b>Multi-Account Manager</b>\n",
+        f"📊 <b>Total Accounts:</b> <code>{len(accounts)}</code>",
+        f"🟢 <b>Active Account:</b> <b>{html.escape(active_acc.get('first_name', 'User'))}</b> (<code>{active_acc.get('phone', 'N/A')}</code>)\n",
+        "👇 <i>Tap an account to switch to it, or remove old accounts:</i>\n"
+    ]
+
+    buttons = []
+    for idx, acc in enumerate(accounts, 1):
+        is_active = acc.get('is_active', False)
+        acc_id = acc.get('account_id')
+        name = acc.get('first_name', f"Account {idx}")
+        phone = acc.get('phone', '')
+        status_icon = "🟢" if is_active else "⚪"
+        active_tag = " [ACTIVE]" if is_active else ""
+        btn_label = f"{status_icon} {idx}. {name[:12]} ({phone[-4:] if len(phone)>=4 else phone}){active_tag}"
+        
+        row = [InlineKeyboardButton(btn_label, callback_data=f"acc_switch:{acc_id}")]
+        row.append(InlineKeyboardButton("🗑️", callback_data=f"acc_del:{acc_id}"))
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton("➕ Add Another Account", callback_data="acc_add_choice"),
+        InlineKeyboardButton("🔄 Refresh", callback_data="acc_refresh")
+    ])
+    buttons.append([InlineKeyboardButton("❌ Close", callback_data="acc_close")])
+
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+@app.on_message(filters.command(["accounts", "switchaccount", "myaccounts"]) & filters.private & ~filters.bot)
+async def accounts_command_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_authorized(user_id):
+        return await message.reply('⛔ <b>Access Denied:</b> You are not authorized to use this bot.', quote=True)
+    text, markup = await build_accounts_ui(user_id)
+    await message.reply(text, reply_markup=markup, quote=True, parse_mode=enums.ParseMode.HTML)
 
 @app.on_message(filters.private & ~filters.forwarded & filters.command(["login"]))
 async def login_handler(bot: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
     if not is_authorized(user_id):
         return await message.reply('⛔ <b>Access Denied:</b> You are not authorized to use this bot.', quote=True)
-    
-    if not await db.is_user_exist(message.from_user.id):
-        await db.add_user(message.from_user.id, message.from_user.first_name)
-        
-    user_data = await db.get_session(message.from_user.id)
-    if user_data is not None:
-        await message.reply("**You Are Already Logged In. First /logout Your Old Session. Then Do Login.**")
-        return  
-    user_id = int(message.from_user.id)
 
-    if API_ID != 0 and API_HASH:
-        await message.reply("**🔑 Specific API ID and HASH found in variables. Using them automatically...**")
-        api_id = API_ID
-        api_hash = API_HASH
-    else:
-        api_id_msg = await bot.ask(user_id, "<b>Send Your API ID.</b>", filters=filters.text)
-        if api_id_msg.text == '/cancel':
-            return await api_id_msg.reply('<b>process cancelled !</b>')
-        try:
-            api_id = int(api_id_msg.text)
-            if api_id < 1000000 or api_id > 99999999:
-                 await api_id_msg.reply("**❌ Invalid API ID**\n\nPlease start again with /login.", quote=True)
-                 return
-        except ValueError:
-            await api_id_msg.reply("**Api id must be an integer, start your process again by /login**", quote=True)
-            return
-        
-        api_hash_msg = await bot.ask(user_id, "**Now Send Me Your API HASH**", filters=filters.text)
-        if api_hash_msg.text == '/cancel':
-            return await api_hash_msg.reply('<b>process cancelled !</b>')
-        api_hash = api_hash_msg.text
+    if not await db.is_user_exist(user_id):
+        await db.add_user(user_id, message.from_user.first_name)
 
-        if len(api_hash) != 32:
-             await api_hash_msg.reply("**❌ Invalid API HASH**\n\nPlease start again with /login.", quote=True)
-             return
+    accounts = await db.get_user_accounts(user_id)
+    if accounts:
+        active_acc = next((a for a in accounts if a.get('is_active')), accounts[0])
+        text = (
+            "🔐 <b>Telegram Login & Multi-Account Manager</b>\n\n"
+            f"🟢 <b>Currently Active:</b> <b>{html.escape(active_acc.get('first_name', 'User'))}</b> (<code>{active_acc.get('phone', 'N/A')}</code>)\n"
+            f"📊 <b>Total Saved Accounts:</b> <code>{len(accounts)}</code>\n\n"
+            "You can add another account below without logging out, or manage and switch your accounts:"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔑 Add via String Session (Zero-SMS)", callback_data="login_choice_string"),
+                InlineKeyboardButton("📱 Add via Phone + OTP", callback_data="login_choice_phone")
+            ],
+            [
+                InlineKeyboardButton("👥 Manage / Switch Accounts", callback_data="acc_manage"),
+                InlineKeyboardButton("❌ Cancel", callback_data="acc_close")
+            ]
+        ])
+        return await message.reply(text, reply_markup=markup, quote=True)
 
-    login_text = (
-        "🔐 **Login Process Initiated**\n\n"
-        "Please send your **Phone Number** in international format.\n"
-        "Example: `+1234567890`\n\n"
-        "🛡️ *Your session is stored securely locally.*"
+    text = (
+        "🔐 <b>Telegram Account Login</b>\n\n"
+        "Choose your preferred login method:\n\n"
+        "1️⃣ <b>🔑 Pyrogram String Session (Recommended - Zero SMS)</b>\n"
+        "⚡ <i>1-second instant login! 100% reliable, zero SMS required, bypasses all carrier SMS filters and Telegram MTProto rate limits.</i>\n\n"
+        "2️⃣ <b>📱 Phone Number + OTP</b>\n"
+        "<i>Direct login with official Telegram Desktop headers and live in-app/SMS delivery tracking.</i>"
     )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 Pyrogram String Session (Zero-SMS)", callback_data="login_choice_string")],
+        [InlineKeyboardButton("📱 Phone Number + OTP", callback_data="login_choice_phone")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="acc_close")]
+    ])
+    await message.reply(text, reply_markup=markup, quote=True)
 
-    phone_number_msg = await bot.ask(chat_id=user_id, text=login_text, filters=filters.text)
-    if phone_number_msg.text=='/cancel':
-        return await phone_number_msg.reply('<b>process cancelled !</b>')
-    phone_number = phone_number_msg.text
+async def start_string_session_login(bot: Client, user_id: int):
+    prompt_msg = await bot.ask(
+        user_id,
+        "🔑 <b>Pyrogram String Session Login</b>\n\n"
+        "Please send your <b>Pyrogram Session String</b> below.\n\n"
+        "💡 <i>Tip: You can generate a Pyrogram session using any standard Telegram session generator bot or script.</i>\n\n"
+        "🛡️ <i>Your session string is stored safely in your private database.</i>\n\n"
+        "Enter <code>/cancel</code> to abort.",
+        filters=filters.text,
+        timeout=300
+    )
+    if not prompt_msg.text or prompt_msg.text.strip().lower() == '/cancel':
+        return await bot.send_message(user_id, "❌ <i>Login process cancelled.</i>")
+
+    raw_session = prompt_msg.text.strip().replace(" ", "").replace("\n", "").replace("\r", "")
+    if len(raw_session) < SESSION_STRING_SIZE:
+        return await prompt_msg.reply(
+            "❌ <b>Invalid Session String:</b>\n"
+            "The string provided is too short. Please ensure you copied the complete Pyrogram Session String.",
+            quote=True
+        )
+
+    validating_msg = await prompt_msg.reply("🔄 <b>Connecting & verifying session with Telegram...</b>", quote=True)
+    temp_client = None
+    try:
+        temp_client = Client(
+            f"auth_val_{user_id}_{int(time.time())}",
+            session_string=raw_session,
+            api_id=API_ID or 6,
+            api_hash=API_HASH or "eb06d4abfb49dc3eeb1aeb98ae0f581e",
+            device_model="Telegram Desktop",
+            system_version="Windows 11 x64",
+            app_version="5.6.1 x64",
+            lang_code="en",
+            in_memory=True
+        )
+        await temp_client.start()
+        me = await temp_client.get_me()
+        
+        acc_data = {
+            'account_id': str(me.id),
+            'phone': f"+{me.phone_number}" if me.phone_number else "Hidden",
+            'first_name': me.first_name or "Telegram User",
+            'username': f"@{me.username}" if me.username else "",
+            'user_id': me.id,
+            'session': raw_session,
+            'api_id': API_ID,
+            'api_hash': API_HASH
+        }
+        await db.add_user_account(user_id, acc_data, set_as_active=True)
+        
+        try: await temp_client.stop()
+        except Exception: pass
+        
+        if user_id in USER_CLIENTS:
+            try: await USER_CLIENTS[user_id].stop()
+            except Exception: pass
+            USER_CLIENTS.pop(user_id, None)
+            
+        await get_user_client(user_id)
+        
+        success_text = (
+            "✅ <b>Telegram Account Connected Successfully!</b>\n\n"
+            f"👤 <b>Name:</b> {html.escape(acc_data['first_name'])}\n"
+            f"🆔 <b>User ID:</b> <code>{me.id}</code>\n"
+            f"📞 <b>Phone:</b> <code>{acc_data['phone']}</code>\n"
+            f"🔗 <b>Username:</b> {acc_data['username'] or 'None'}\n\n"
+            "🟢 <b>Status:</b> Active\n"
+            "All restricted downloads, fast copies, and watchers will now use this account!\n"
+            "Use /accounts anytime to view or switch accounts."
+        )
+        await validating_msg.edit(success_text)
+    except Exception as e:
+        if temp_client:
+            try: await temp_client.stop()
+            except Exception: pass
+        await validating_msg.edit(f"❌ <b>Login Failed:</b> <code>{html.escape(str(e))}</code>\n\nPlease check your session string and try again with /login.")
+
+async def start_phone_login(bot: Client, user_id: int):
+    api_id = API_ID
+    api_hash = API_HASH
     
-    client_auth = Client(f"login_{user_id}_{int(time.time())}", api_id=api_id, api_hash=api_hash, in_memory=True)
-    await client_auth.connect()
+    if API_ID == 0 or not API_HASH:
+        api_id_msg = await bot.ask(user_id, "<b>Send Your API ID from my.telegram.org.</b>\n\nEnter /cancel to abort.", filters=filters.text, timeout=300)
+        if not api_id_msg.text or api_id_msg.text.strip().lower() == '/cancel':
+            return await bot.send_message(user_id, "❌ <i>Login process cancelled.</i>")
+        try:
+            api_id = int(api_id_msg.text.strip())
+            if api_id < 10000 or api_id > 999999999:
+                return await api_id_msg.reply("❌ <b>Invalid API ID.</b> Start again with /login.", quote=True)
+        except ValueError:
+            return await api_id_msg.reply("❌ <b>API ID must be an integer.</b> Start again with /login.", quote=True)
+
+        api_hash_msg = await bot.ask(user_id, "<b>Now Send Your API HASH from my.telegram.org.</b>\n\nEnter /cancel to abort.", filters=filters.text, timeout=300)
+        if not api_hash_msg.text or api_hash_msg.text.strip().lower() == '/cancel':
+            return await bot.send_message(user_id, "❌ <i>Login process cancelled.</i>")
+        api_hash = api_hash_msg.text.strip()
+        if len(api_hash) != 32:
+            return await api_hash_msg.reply("❌ <b>Invalid API HASH</b> (must be 32 characters). Start again with /login.", quote=True)
+
+    phone_prompt = (
+        "📱 <b>Phone Number Login</b>\n\n"
+        "Please send your <b>Phone Number</b> in international format.\n"
+        "Example: <code>+1234567890</code> or <code>+919876543210</code>\n\n"
+        "Enter <code>/cancel</code> to abort."
+    )
+    phone_msg = await bot.ask(user_id, phone_prompt, filters=filters.text, timeout=300)
+    if not phone_msg.text or phone_msg.text.strip().lower() == '/cancel':
+        return await bot.send_message(user_id, "❌ <i>Login process cancelled.</i>")
+
+    phone_number = re.sub(r"[^\d+]", "", phone_msg.text.strip())
+    if not phone_number.startswith("+"):
+        phone_number = "+" + phone_number
+    if len(phone_number) < 8 or len(phone_number) > 16:
+        return await phone_msg.reply("❌ <b>Invalid phone number format.</b> Include country code, e.g. <code>+919876543210</code>.", quote=True)
+
+    status_msg = await phone_msg.reply("🔄 <b>Connecting to Telegram & requesting OTP...</b>", quote=True)
+
+    client_auth = Client(
+        f"login_{user_id}_{int(time.time())}",
+        api_id=api_id,
+        api_hash=api_hash,
+        device_model="Telegram Desktop",
+        system_version="Windows 11 x64",
+        app_version="5.6.1 x64",
+        lang_code="en",
+        in_memory=True
+    )
     
-    await phone_number_msg.reply("Sending OTP...")
+    try:
+        await client_auth.connect()
+    except Exception as e:
+        return await status_msg.edit(f"❌ <b>Connection Error:</b> <code>{html.escape(str(e))}</code>")
+
     try:
         code = await client_auth.send_code(phone_number)
-        phone_code_msg = await bot.ask(user_id, "Please check for an OTP in official telegram account. If you got it, send OTP here after reading the below format. \n\nIf OTP is `12345`, **please send it as** `1 2 3 4 5`.\n\n**Enter /cancel to cancel The Procces**", filters=filters.text, timeout=600)
+    except FloodWait as e:
+        await client_auth.disconnect()
+        return await status_msg.edit(f"⏳ <b>Telegram FloodWait:</b> Please wait <code>{e.value}</code> seconds before trying again.")
     except PhoneNumberInvalid:
-        await phone_number_msg.reply('`PHONE_NUMBER` **is invalid.**')
         await client_auth.disconnect()
-        return
-        
-    if phone_code_msg.text=='/cancel':
+        return await status_msg.edit("❌ <b>Phone number is invalid</b> in Telegram's database. Please check country code.")
+    except PhoneNumberBanned:
         await client_auth.disconnect()
-        return await phone_code_msg.reply('<b>process cancelled !</b>')
-        
-    try:
-        phone_code = phone_code_msg.text.replace(" ", "")
-        await client_auth.sign_in(phone_number, code.phone_code_hash, phone_code)
-    except PhoneCodeInvalid:
-        await phone_code_msg.reply('**OTP is invalid.**')
+        return await status_msg.edit("🚫 <b>This phone number is banned</b> from Telegram.")
+    except ApiIdInvalid:
         await client_auth.disconnect()
-        return
-    except PhoneCodeExpired:
-        await phone_code_msg.reply('**OTP is expired.**')
-        await client_auth.disconnect()
-        return
-    except SessionPasswordNeeded:
-        two_step_msg = await bot.ask(user_id, '**Your account has enabled two-step verification. Please provide the password.\n\nEnter /cancel to cancel The Procces**', filters=filters.text, timeout=300)
-        if two_step_msg.text=='/cancel':
-            await client_auth.disconnect()
-            return await two_step_msg.reply('<b>process cancelled !</b>')
-        try:
-            password = two_step_msg.text
-            await client_auth.check_password(password=password)
-        except PasswordHashInvalid:
-            await two_step_msg.reply('**Invalid Password Provided**')
-            await client_auth.disconnect()
-            return
-            
-    string_session = await client_auth.export_session_string()
-    await client_auth.disconnect()
-    
-    if len(string_session) < SESSION_STRING_SIZE:
-        return await message.reply('<b>invalid session sring</b>')
-    try:
-        user_data = await db.get_session(message.from_user.id)
-        if user_data is None:
-            uclient = Client(f"verify_{message.from_user.id}_{int(time.time())}", session_string=string_session, api_id=api_id, api_hash=api_hash, in_memory=True)
-            await uclient.connect()
-            
-            await db.set_session(message.from_user.id, session=string_session)
-            await db.set_api_id(message.from_user.id, api_id=api_id)
-            await db.set_api_hash(message.from_user.id, api_hash=api_hash)
-            
-            try:
-                await uclient.disconnect()
-            except Exception:
-                pass
+        return await status_msg.edit("❌ <b>API ID / API Hash invalid.</b>")
     except Exception as e:
-        return await message.reply_text(f"<b>ERROR IN LOGIN:</b> `{e}`")
-    await bot.send_message(message.from_user.id, "<b>Account Login Successfully.\n\nIf You Get Any Error Related To AUTH KEY Then /logout first and /login again</b>")
+        await client_auth.disconnect()
+        return await status_msg.edit(f"❌ <b>Failed to send OTP:</b> <code>{html.escape(str(e))}</code>\n\n💡 <i>Try logging in via <b>Pyrogram Session String</b> instead (Zero SMS)!</i>")
+
+    PENDING_LOGINS[user_id] = {
+        'client': client_auth,
+        'phone': phone_number,
+        'phone_code_hash': code.phone_code_hash,
+        'api_id': api_id,
+        'api_hash': api_hash,
+        'time': time.time()
+    }
+
+    code_type = getattr(code, 'type', None)
+    type_str = str(code_type).lower()
+    
+    if "app" in type_str:
+        where_otp = (
+            "📩 <b>OTP sent to Official Telegram App!</b>\n"
+            "👉 Please open Telegram on your other device (phone or PC) and check the chat from <b>Telegram (777000)</b>.\n"
+            "<i>(Telegram did NOT send an SMS because you have an active Telegram app session).</i>"
+        )
+    elif "sms" in type_str:
+        where_otp = (
+            "📱 <b>OTP sent via SMS!</b>\n"
+            "👉 Please check the SMS messages on your phone SIM card."
+        )
+    elif "call" in type_str:
+        where_otp = (
+            "📞 <b>Telegram will call your phone!</b>\n"
+            "👉 Answer the call to hear your verification code."
+        )
+    else:
+        where_otp = "🔔 <b>Telegram sent your verification code!</b>"
+
+    otp_prompt_text = (
+        f"{where_otp}\n\n"
+        f"Phone: <code>{phone_number}</code>\n\n"
+        "<b>Send your OTP code here.</b>\n"
+        "You can send it as <code>12345</code> or with spaces <code>1 2 3 4 5</code>.\n\n"
+        "💡 <i>Didn't get the code? Tap <b>[📲 Resend OTP via SMS]</b> below or send <code>/resend</code>.</i>\n"
+        "Enter <code>/cancel</code> to abort."
+    )
+    resend_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📲 Resend OTP via SMS", callback_data="resend_otp_btn")],
+        [InlineKeyboardButton("❌ Cancel Login", callback_data="cancel_otp_btn")]
+    ])
+    await status_msg.edit(otp_prompt_text, reply_markup=resend_kb)
+
+    otp_msg = await bot.ask(user_id, "⌨️ <b>Waiting for OTP code:</b>", filters=filters.text, timeout=600)
+    if not otp_msg.text or otp_msg.text.strip().lower() == '/cancel':
+        if user_id in PENDING_LOGINS:
+            try: await PENDING_LOGINS[user_id]['client'].disconnect()
+            except Exception: pass
+            PENDING_LOGINS.pop(user_id, None)
+        return await bot.send_message(user_id, "❌ <i>Login process cancelled.</i>")
+
+    if otp_msg.text.strip().lower() == '/resend':
+        return await handle_resend_otp(bot, user_id, status_msg)
+
+    raw_code = re.sub(r"\D", "", otp_msg.text.strip())
+    if not raw_code:
+        if user_id in PENDING_LOGINS:
+            try: await PENDING_LOGINS[user_id]['client'].disconnect()
+            except Exception: pass
+            PENDING_LOGINS.pop(user_id, None)
+        return await otp_msg.reply("❌ <b>Invalid OTP format.</b> OTP must contain numbers.", quote=True)
+
+    verifying_msg = await otp_msg.reply("🔄 <b>Signing in to Telegram...</b>", quote=True)
+    
+    try:
+        await client_auth.sign_in(phone_number, code.phone_code_hash, raw_code)
+    except PhoneCodeInvalid:
+        return await verifying_msg.edit("❌ <b>OTP is invalid.</b> Please try again with /login.")
+    except PhoneCodeExpired:
+        return await verifying_msg.edit("❌ <b>OTP is expired.</b> Please request a new code with /login.")
+    except SessionPasswordNeeded:
+        two_step_msg = await bot.ask(
+            user_id,
+            "🔐 <b>Two-Step Verification (2FA) Password Required:</b>\n\n"
+            "Your Telegram account has cloud password protection enabled.\n"
+            "Please send your <b>2FA Password</b> below.\n\n"
+            "Enter <code>/cancel</code> to abort.",
+            filters=filters.text,
+            timeout=300
+        )
+        if not two_step_msg.text or two_step_msg.text.strip().lower() == '/cancel':
+            return await bot.send_message(user_id, "❌ <i>Login cancelled.</i>")
+        try:
+            await client_auth.check_password(password=two_step_msg.text.strip())
+        except PasswordHashInvalid:
+            return await two_step_msg.reply("❌ <b>Invalid 2FA password provided.</b> Start again with /login.", quote=True)
+        except Exception as e:
+            return await two_step_msg.reply(f"❌ <b>2FA Error:</b> <code>{html.escape(str(e))}</code>", quote=True)
+    except Exception as e:
+        return await verifying_msg.edit(f"❌ <b>Sign-in error:</b> <code>{html.escape(str(e))}</code>")
+
+    string_session = await client_auth.export_session_string()
+    me = await client_auth.get_me()
+    await client_auth.disconnect()
+    PENDING_LOGINS.pop(user_id, None)
+
+    acc_data = {
+        'account_id': str(me.id),
+        'phone': phone_number,
+        'first_name': me.first_name or "Telegram User",
+        'username': f"@{me.username}" if me.username else "",
+        'user_id': me.id,
+        'session': string_session,
+        'api_id': api_id,
+        'api_hash': api_hash
+    }
+    await db.add_user_account(user_id, acc_data, set_as_active=True)
+
+    if user_id in USER_CLIENTS:
+        try: await USER_CLIENTS[user_id].stop()
+        except Exception: pass
+        USER_CLIENTS.pop(user_id, None)
+
+    await get_user_client(user_id)
+
+    success_text = (
+        "✅ <b>Telegram Account Connected Successfully!</b>\n\n"
+        f"👤 <b>Name:</b> {html.escape(acc_data['first_name'])}\n"
+        f"🆔 <b>User ID:</b> <code>{me.id}</code>\n"
+        f"📞 <b>Phone:</b> <code>{acc_data['phone']}</code>\n"
+        f"🔗 <b>Username:</b> {acc_data['username'] or 'None'}\n\n"
+        "🟢 <b>Status:</b> Active\n"
+        "All restricted downloads, fast copies, and watchers will now use this account!\n"
+        "Use /accounts anytime to view or switch accounts."
+    )
+    await verifying_msg.edit(success_text)
+
+async def handle_resend_otp(bot: Client, user_id: int, status_msg: Message = None):
+    login_info = PENDING_LOGINS.get(user_id)
+    if not login_info:
+        if status_msg:
+            await status_msg.edit("❌ <b>No pending login found.</b> Please start again with /login.")
+        else:
+            await bot.send_message(user_id, "❌ <b>No pending login found.</b> Please start again with /login.")
+        return
+
+    client_auth = login_info['client']
+    phone = login_info['phone']
+    old_hash = login_info['phone_code_hash']
+
+    try:
+        new_code = await client_auth.resend_code(phone, old_hash)
+        login_info['phone_code_hash'] = new_code.phone_code_hash
+        code_type = getattr(new_code, 'type', None)
+        msg_text = (
+            f"📲 <b>OTP Resent Successfully!</b>\n\n"
+            f"Telegram dispatched a new verification code.\n"
+            f"Delivery Type: <b>{str(code_type).replace('SentCodeType.', '')}</b>\n\n"
+            "👉 Please check your SMS messages on your phone.\n"
+            "Send the new code here when received, or <code>/cancel</code> to abort."
+        )
+        if status_msg:
+            await status_msg.edit(msg_text)
+        else:
+            await bot.send_message(user_id, msg_text)
+    except FloodWait as e:
+        err = f"⏳ <b>FloodWait:</b> Please wait <code>{e.value}</code> seconds before requesting resend."
+        if status_msg: await status_msg.edit(err)
+        else: await bot.send_message(user_id, err)
+    except Exception as e:
+        err = f"❌ <b>Resend Failed:</b> <code>{html.escape(str(e))}</code>\n\n💡 <i>Try logging in via <b>Pyrogram Session String</b> instead (Zero SMS)!</i>"
+        if status_msg: await status_msg.edit(err)
+        else: await bot.send_message(user_id, err)
+
+@app.on_message(filters.command(["resend", "resendotp"]) & filters.private & ~filters.bot)
+async def resend_command_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_authorized(user_id):
+        return await message.reply('⛔ <b>Access Denied:</b> You are not authorized to use this bot.', quote=True)
+    await handle_resend_otp(client, user_id)
+
+@app.on_callback_query(filters.regex(r"^resend_otp_btn$"))
+async def resend_otp_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    await query.answer("Requesting SMS resend from Telegram...", show_alert=False)
+    await handle_resend_otp(client, user_id, query.message)
+
+@app.on_callback_query(filters.regex(r"^cancel_otp_btn$"))
+async def cancel_otp_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id in PENDING_LOGINS:
+        try: await PENDING_LOGINS[user_id]['client'].disconnect()
+        except Exception: pass
+        PENDING_LOGINS.pop(user_id, None)
+    await query.message.edit_text("❌ <i>Login process cancelled.</i>")
+    await query.answer("Login cancelled.")
+
+@app.on_callback_query(filters.regex(r"^login_choice_string$"))
+async def login_choice_string_cb(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    await query.answer()
+    try: await query.message.delete()
+    except Exception: pass
+    await start_string_session_login(client, user_id)
+
+@app.on_callback_query(filters.regex(r"^login_choice_phone$"))
+async def login_choice_phone_cb(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    await query.answer()
+    try: await query.message.delete()
+    except Exception: pass
+    await start_phone_login(client, user_id)
+
+@app.on_callback_query(filters.regex(r"^acc_switch:(.+)"))
+async def acc_switch_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    acc_id = query.matches[0].group(1)
+    switched = await db.switch_active_account(user_id, acc_id)
+    if not switched:
+        return await query.answer("❌ Account not found.", show_alert=True)
+        
+    if user_id in USER_CLIENTS:
+        try: await USER_CLIENTS[user_id].stop()
+        except Exception: pass
+        USER_CLIENTS.pop(user_id, None)
+    await get_user_client(user_id)
+    
+    text, markup = await build_accounts_ui(user_id)
+    try: await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception: pass
+    await query.answer(f"Switched to {switched.get('first_name', 'Account')}!", show_alert=False)
+
+@app.on_callback_query(filters.regex(r"^acc_del:(.+)"))
+async def acc_del_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    acc_id = query.matches[0].group(1)
+    rem, new_act = await db.delete_user_account(user_id, acc_id)
+    
+    if user_id in USER_CLIENTS:
+        try: await USER_CLIENTS[user_id].stop()
+        except Exception: pass
+        USER_CLIENTS.pop(user_id, None)
+    if new_act:
+        await get_user_client(user_id)
+        
+    text, markup = await build_accounts_ui(user_id)
+    try: await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception: pass
+    await query.answer("Account removed.", show_alert=False)
+
+@app.on_callback_query(filters.regex(r"^acc_manage$|^acc_refresh$"))
+async def acc_manage_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    text, markup = await build_accounts_ui(user_id)
+    try: await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception: pass
+    await query.answer()
+
+@app.on_callback_query(filters.regex(r"^acc_add_choice$"))
+async def acc_add_choice_callback(client: Client, query: CallbackQuery):
+    text = (
+        "➕ <b>Add Another Telegram Account</b>\n\n"
+        "Choose how you want to add the new account:\n\n"
+        "1️⃣ <b>🔑 String Session (Zero-SMS, Recommended)</b>\n"
+        "2️⃣ <b>📱 Phone Number + OTP</b>"
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 String Session", callback_data="login_choice_string")],
+        [InlineKeyboardButton("📱 Phone Number + OTP", callback_data="login_choice_phone")],
+        [InlineKeyboardButton("🔙 Back to Accounts", callback_data="acc_manage")]
+    ])
+    try: await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception: pass
+    await query.answer()
+
+@app.on_callback_query(filters.regex(r"^acc_close$"))
+async def acc_close_callback(client: Client, query: CallbackQuery):
+    try: await query.message.delete()
+    except Exception: pass
+    await query.answer()
+
+@app.on_callback_query(filters.regex(r"^logout_act_confirm$"))
+async def logout_act_confirm_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    accounts = await db.get_user_accounts(user_id)
+    active_acc = next((a for a in accounts if a.get('is_active')), None)
+    if active_acc:
+        rem, new_act = await db.delete_user_account(user_id, active_acc['account_id'])
+        if user_id in USER_CLIENTS:
+            try: await USER_CLIENTS[user_id].stop()
+            except Exception: pass
+            USER_CLIENTS.pop(user_id, None)
+        if new_act:
+            await get_user_client(user_id)
+    await query.message.edit_text("✅ <b>Active account logged out successfully!</b>")
+    await query.answer("Active account logged out.")
+
+@app.on_callback_query(filters.regex(r"^logout_all_confirm$"))
+async def logout_all_confirm_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    await force_logout_user(user_id)
+    await query.message.edit_text("✅ <b>All accounts logged out and cleared!</b>")
+    await query.answer("All accounts cleared.")
 
 # ==============================================================================
 # --- BROADCAST ---
@@ -6792,6 +7401,7 @@ async def register_bot_commands(bot_client: Client) -> bool:
             BotCommand("viewsourcechannels", "📋 View & Manage Saved Sources"),
             BotCommand("viewdestinationchannels", "📑 View & Manage Saved Destinations"),
             BotCommand("login", "📍 Login Your Telegram String Session"),
+            BotCommand("accounts", "👥 Manage & Switch Multi-Accounts"),
             BotCommand("logout", "🚨 Logout Your Session"),
             BotCommand("dl", "🦥 Reply to the link to forward"),
             BotCommand("watch", "👀 To live forward"),
