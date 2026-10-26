@@ -10,3 +10,14 @@ downloads/
 temp/
 venv/
 .venv/
+
+# Personal AI Agent memory, guidelines, and local status files
+PROJECT_MEMORY.md
+PROJECT_STATUS.md
+GEMINI.md
+AGENTS.md
+.agents/
+.gemini/
+.env
+.env.*
+!.env.example
