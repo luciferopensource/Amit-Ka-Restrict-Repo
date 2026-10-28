@@ -592,6 +592,10 @@ Every configuration parameter is derived directly from the application source co
   * `/viewsourcechannels` (Alias: `/viewsources`) — Paginated interactive browser (10 channels per page) with delete confirmation and 1-click `/watch` deployment.
   * `/viewdestinationchannels` (Alias: `/viewdest`) — Paginated interactive browser for saved destination channels with delete confirmation.
 * **Watcher Integration:** Running `/watch` without arguments queries your saved source channels, presenting an interactive grid where tapping any channel immediately starts surveillance configuration!
+* **WATCHERS 1-Click Migration:**
+  * Access `/watchers` and click **`📥 Save All WATCHERS Source Channels`** to automatically extract, resolve real Telegram names, and import all active source channels into persistent memory.
+  * Click **`📤 Save All WATCHERS Destination Channels`** to extract all destination peers across single-target and multi-target surveillance routes and import each destination channel once.
+  * **Guaranteed Deduplication:** Canonical channel IDs are normalised and deduplicated (`user_id + channel_type + normalised channel_id`) so that multiple watcher routes targeting the same channel produce a single clean entry without modifying active routes.
 
 ---
 

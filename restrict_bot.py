@@ -170,7 +170,8 @@ HELP_TXT = """<b>📚 TELEGRAM RESTRICT & FORWARDING BOT — MASTER USER MANUAL<
   ├ <code>/addsourcechannel [Link/ID]</code> (or <code>/addsource</code>) - Auto-resolves title & saves source.
   ├ <code>/adddestinationchannel [Link/ID]</code> (or <code>/adddest</code>) - Tests write access & saves destination.
   ├ <code>/viewsourcechannels</code> (or <code>/viewsources</code>) - 10-per-page browser with 1-click Watch & delete.
-  └ <code>/viewdestinationchannels</code> (or <code>/viewdest</code>) - 10-per-page browser with channel management.
+  ├ <code>/viewdestinationchannels</code> (or <code>/viewdest</code>) - 10-per-page browser with channel management.
+  └ <b>WATCHERS Migration:</b> Use <code>/watchers</code> to auto-import all active watcher channels into saved memory!
 
 <b>👀 3. 24/7 LIVE WATCHERS & SURVEILLANCE (/watch)</b>
 • Real-time channel watcher that auto-routes new messages instantaneously.
@@ -180,7 +181,7 @@ HELP_TXT = """<b>📚 TELEGRAM RESTRICT & FORWARDING BOT — MASTER USER MANUAL<
 • <b>Multi-Routing:</b> Route 1 source to multiple destinations simultaneously.
 • <b>Content Filtering:</b> Select Video, Document, Photo, Audio, Voice, Text, Animation, or Sticker.
 • <b>Typography Engine:</b> Format captions with <b>Mono</b>, <b>Bold</b>, <b>Italic</b>, or combinations (e.g. Bold+Italic, Mono+Bold), plus Original or Cleaned captions!
-• <b>Active Codex:</b> <code>/watchers</code> (or <code>/list</code>) - View and manage active surveillance routes.
+• <b>Active Codex:</b> <code>/watchers</code> (or <code>/list</code>) - View, manage, or import active surveillance routes.
 • <b>Watcher Removal:</b> <code>/removetarget &lt;src&gt; &lt;dst&gt;</code> or <code>/removesource &lt;src&gt;</code> (or <code>/unwatch</code>).
 
 <b>🏷️ 4. CUSTOM RE-BRANDING & THUMBNAILS</b>
@@ -464,6 +465,228 @@ class Database:
         except Exception as e:
             print(f"Error deleting saved channel: {e}")
             return False
+
+    async def update_channel_title(self, user_id: int, channel_id, new_title: str, channel_type: str = None, thread_id=None):
+        """
+        Updates the channel title in-place in saved_channels without altering thread_id or incrementing use_count.
+        """
+        if self.db is None:
+            return False
+        try:
+            norm_id = int(channel_id) if str(channel_id).lstrip('-').isdigit() else str(channel_id)
+            query = {
+                "user_id": int(user_id),
+                "channel_id": norm_id
+            }
+            if channel_type and channel_type != "all":
+                ch_type = str(channel_type).lower()
+                if ch_type == "dest":
+                    query["channel_type"] = {"$in": ["dest", None]}
+                else:
+                    query["channel_type"] = ch_type
+
+            if thread_id is not None:
+                query["thread_id"] = int(thread_id) if thread_id else None
+
+            res = await self.db.saved_channels.update_many(
+                query,
+                {
+                    "$set": {
+                        "channel_title": str(new_title),
+                        "last_used": datetime.datetime.now()
+                    }
+                }
+            )
+            return (res.modified_count > 0)
+        except Exception as e:
+            print(f"Error updating channel title: {e}")
+            return False
+
+    async def import_watchers_channels(self, client: Client, user_id: int, channel_type: str = "source") -> dict:
+        """
+        Extracts, resolves real titles, and idempotently imports active watcher channels into saved_channels.
+        channel_type: 'source' or 'dest'
+        Canonical deduplication: user_id + channel_type + normalised channel_id
+        Guarantees that each channel is saved at most once in saved_channels per user.
+        """
+        if hasattr(self, "db") and self.db is None:
+            return {
+                "channel_type": channel_type,
+                "discovered": 0,
+                "newly_saved": 0,
+                "already_saved": 0,
+                "unresolved": 0,
+                "errors": ["Database not connected"]
+            }
+
+        ch_type = str(channel_type or "source").lower()
+        is_source = (ch_type == "source")
+
+        # 1. Fetch user's watchers
+        user_watchers = await self.get_user_watchers(user_id)
+        if not user_watchers:
+            return {
+                "channel_type": ch_type,
+                "discovered": 0,
+                "newly_saved": 0,
+                "already_saved": 0,
+                "unresolved": 0,
+                "errors": []
+            }
+
+        # 2. Extract and deduplicate candidate channels in memory
+        candidates = {}  # norm_id -> {"title": ..., "thread_id": ...}
+
+        for w in user_watchers:
+            if is_source:
+                src_raw = w.get("source_id")
+                if src_raw is None or str(src_raw).strip() == "":
+                    continue
+                try:
+                    norm_id = int(src_raw) if str(src_raw).lstrip('-').isdigit() else str(src_raw)
+                except Exception:
+                    continue
+
+                src_title = w.get("source_title") or w.get("title") or w.get("src_title")
+                src_thread = w.get("source_thread")
+
+                if norm_id not in candidates:
+                    candidates[norm_id] = {
+                        "title": str(src_title).strip() if src_title else None,
+                        "thread_id": int(src_thread) if src_thread else None
+                    }
+                else:
+                    cand_t = candidates[norm_id]["title"]
+                    if (not cand_t or cand_t.startswith("Chat ") or cand_t.startswith("[Unresolved]")) and src_title:
+                        candidates[norm_id]["title"] = str(src_title).strip()
+            else:
+                targets = w.get("targets", [])
+                if not targets and "dest_id" in w:
+                    targets = [{
+                        "dest_id": w.get("dest_id"),
+                        "dest_thread": w.get("dest_thread"),
+                        "dest_title": w.get("dest_title")
+                    }]
+
+                for t in targets:
+                    if not isinstance(t, dict):
+                        continue
+                    dst_raw = t.get("dest_id")
+                    if dst_raw is None or str(dst_raw).strip() == "":
+                        continue
+                    try:
+                        norm_id = int(dst_raw) if str(dst_raw).lstrip('-').isdigit() else str(dst_raw)
+                    except Exception:
+                        continue
+
+                    dst_title = t.get("dest_title") or t.get("title") or t.get("name")
+                    dst_thread = t.get("dest_thread")
+
+                    if norm_id not in candidates:
+                        candidates[norm_id] = {
+                            "title": str(dst_title).strip() if dst_title else None,
+                            "thread_id": int(dst_thread) if dst_thread else None
+                        }
+                    else:
+                        cand_t = candidates[norm_id]["title"]
+                        if (not cand_t or cand_t.startswith("Chat ") or cand_t.startswith("[Unresolved]")) and dst_title:
+                            candidates[norm_id]["title"] = str(dst_title).strip()
+
+        discovered_count = len(candidates)
+        if discovered_count == 0:
+            return {
+                "channel_type": ch_type,
+                "discovered": 0,
+                "newly_saved": 0,
+                "already_saved": 0,
+                "unresolved": 0,
+                "errors": []
+            }
+
+        # 3. Fetch existing saved channels for this user and channel_type to check presence
+        existing_saved = await self.get_saved_channels(user_id, channel_type=ch_type)
+        existing_map = {}
+        for doc in existing_saved:
+            cid = doc.get("channel_id")
+            norm_cid = int(cid) if str(cid).lstrip('-').isdigit() else str(cid)
+            if norm_cid not in existing_map:
+                existing_map[norm_cid] = doc
+
+        newly_saved_count = 0
+        already_saved_count = 0
+        unresolved_count = 0
+        errors = []
+
+        # 4. Migrate channels idempotently
+        for cid, info in candidates.items():
+            existing_doc = existing_map.get(cid)
+            if existing_doc:
+                already_saved_count += 1
+                curr_title = existing_doc.get("channel_title")
+                is_curr_generic = (
+                    not curr_title
+                    or curr_title.startswith("Chat ")
+                    or curr_title.startswith("[Unresolved]")
+                    or curr_title in ["Target Chat", "Destination", "Source", "Unknown Destination"]
+                )
+                if is_curr_generic:
+                    cand_title = info.get("title")
+                    is_cand_generic = (
+                        not cand_title
+                        or cand_title.startswith("Chat ")
+                        or cand_title.startswith("[Unresolved]")
+                        or cand_title in ["Target Chat", "Destination", "Source", "Unknown Destination"]
+                    )
+                    best_title = cand_title if not is_cand_generic else None
+                    if not best_title:
+                        try:
+                            _, resolved, _, _ = await resolve_telegram_chat_title(client, user_id, cid)
+                            if resolved:
+                                best_title = resolved
+                        except Exception as e_res:
+                            logger.error(f"Error resolving title for {cid} during migration: {e_res}")
+
+                    if best_title:
+                        await self.update_channel_title(user_id, cid, best_title, channel_type=ch_type)
+                        existing_doc["channel_title"] = best_title
+                    else:
+                        unresolved_count += 1
+            else:
+                cand_title = info.get("title")
+                is_cand_generic = (
+                    not cand_title
+                    or cand_title.startswith("Chat ")
+                    or cand_title.startswith("[Unresolved]")
+                    or cand_title in ["Target Chat", "Destination", "Source", "Unknown Destination"]
+                )
+                final_title = cand_title if not is_cand_generic else None
+                if not final_title:
+                    try:
+                        _, resolved, _, _ = await resolve_telegram_chat_title(client, user_id, cid)
+                        if resolved:
+                            final_title = resolved
+                    except Exception as e_res:
+                        logger.error(f"Error resolving title for {cid} during migration: {e_res}")
+
+                if not final_title:
+                    unresolved_count += 1
+                    final_title = f"[Unresolved] Chat {cid}"
+
+                try:
+                    await self.save_channel(user_id, cid, final_title, channel_type=ch_type, thread_id=info.get("thread_id"))
+                    newly_saved_count += 1
+                    existing_map[cid] = {"channel_id": cid, "channel_title": final_title}
+                except Exception as e_save:
+                    errors.append(f"Failed to save channel {cid}: {e_save}")
+
+        return {
+            "channel_type": ch_type,
+            "discovered": discovered_count,
+            "newly_saved": newly_saved_count,
+            "already_saved": already_saved_count,
+            "unresolved": unresolved_count,
+            "errors": errors
+        }
 
     def new_user(self, id, name):
         return dict(
@@ -1222,6 +1445,7 @@ USER_SEMAPHORES = defaultdict(lambda: asyncio.Semaphore(USER_SEMAPHORE_LIMIT))
 
 PENDING_TASKS = {}
 PENDING_ADD_CHANNEL = {}  # user_id -> prompt_message_id
+IMPORT_LOCKS = set()  # set of (user_id, channel_type) tuples preventing concurrent migration runs
 PROGRESS = {}
 SESSION_STRING_SIZE = 351
 
@@ -1999,16 +2223,17 @@ async def test_destination_access(client: Client, chat_id, thread_id=None, user_
         await test_msg.delete()
         return True, "Success"
     except Exception as e:
-        if user_id and user_id in USER_CLIENTS and getattr(USER_CLIENTS[user_id], "is_connected", False):
+        if user_id:
             try:
-                u_client = USER_CLIENTS[user_id]
-                test_msg = await u_client.send_message(
-                    chat_id=chat_id,
-                    text="🔄 **Testing Destination Accessibility...**\n*(This message will self-destruct)*",
-                    reply_to_message_id=thread_id
-                )
-                await test_msg.delete()
-                return True, "Success"
+                u_client = await get_user_client(user_id)
+                if u_client and getattr(u_client, "is_connected", False):
+                    test_msg = await u_client.send_message(
+                        chat_id=chat_id,
+                        text="🔄 **Testing Destination Accessibility...**\n*(This message will self-destruct)*",
+                        reply_to_message_id=thread_id
+                    )
+                    await test_msg.delete()
+                    return True, "Success"
             except Exception as ue:
                 return False, f"Bot error: {e} | User Client error: {ue}"
         return False, str(e)
@@ -2198,8 +2423,12 @@ def build_watchers_page_ui(user_watchers, page=0, is_admin_view=False):
         InlineKeyboardButton("🗑 Unwatch All", callback_data="unwatch_all")
     ])
     full_markup.append([
-        InlineKeyboardButton("📥 Saved Sources", callback_data="ch_page:0:source:view"),
-        InlineKeyboardButton("📤 Saved Destinations", callback_data="ch_page:0:dest:view")
+        InlineKeyboardButton("📥 Save All WATCHERS Source Channels", callback_data="watchers_import_src"),
+        InlineKeyboardButton("📤 Save All WATCHERS Destination Channels", callback_data="watchers_import_dst")
+    ])
+    full_markup.append([
+        InlineKeyboardButton("📂 View Saved Sources", callback_data="ch_page:1:source_view:source"),
+        InlineKeyboardButton("📂 View Saved Destinations", callback_data="ch_page:1:dest_view:dest")
     ])
     full_markup.append([
         InlineKeyboardButton("🔙 Back to Help", callback_data="back_to_help"),
@@ -2276,6 +2505,85 @@ async def watchers_page_callback(client: Client, query: CallbackQuery):
             logger.error(f"Error in watchers_page_callback: {e}")
     await query.answer()
 
+
+@app.on_callback_query(filters.regex(r"^watchers_import_(src|dst)$"))
+async def watchers_import_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+
+    ch_type = "source" if query.matches[0].group(1) == "src" else "dest"
+    type_label = "SOURCE" if ch_type == "source" else "DESTINATION"
+
+    lock_key = (user_id, ch_type)
+    if lock_key in IMPORT_LOCKS:
+        return await query.answer("⏳ Migration is already in progress for this channel type. Please wait...", show_alert=True)
+
+    IMPORT_LOCKS.add(lock_key)
+    try:
+        await query.answer(f"⏳ Importing {type_label.lower()} channels from active watchers...", show_alert=False)
+
+        stats = await db.import_watchers_channels(client, user_id, channel_type=ch_type)
+
+        discovered = stats["discovered"]
+        newly_saved = stats["newly_saved"]
+        already_saved = stats["already_saved"]
+        unresolved = stats["unresolved"]
+        errors = stats["errors"]
+
+        if discovered == 0:
+            result_text = (
+                f"💤 <b>NO ELIGIBLE {type_label} CHANNELS FOUND</b>\n"
+                "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+                f"You do not have any active watcher routes referencing {type_label.lower()} channels to import.\n\n"
+                f"• Use <code>/watch &lt;Link&gt;</code> to set up 24/7 channel monitoring.\n"
+                f"• Or manually save channels using <code>/add{ch_type}channel</code>."
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛰️ Setup New Watcher", callback_data="watch_manual")],
+                [InlineKeyboardButton("🔙 Back to Watchers", callback_data="view_watchers_menu"),
+                 InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+            ])
+            return await query.message.edit_text(result_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+        unresolved_note = ""
+        if unresolved > 0:
+            unresolved_note = (
+                f"\n⚠️ <b>Inaccessible Channels ({unresolved}):</b>\n"
+                f"Some channel titles could not be retrieved from Telegram because neither this bot nor your connected account has access.\n"
+                f"<i>They have been saved with their IDs so your data is preserved. Real names will be updated automatically as soon as access is granted!</i>\n"
+            )
+
+        err_note = ""
+        if errors:
+            err_note = f"\n⚠️ <b>Migration Warnings:</b>\n" + "\n".join(f"• <code>{html.escape(e)}</code>" for e in errors[:3]) + "\n"
+
+        result_text = (
+            f"╔════❰ WATCHERS MEMORY IMPORT ❱═❍⊱❁۪۪\n"
+            f"║ 📂 <b>Type:</b> <b>{type_label} Channels</b>\n"
+            f"╠═► 🔍 <b>Distinct Channels Discovered:</b> <code>{discovered}</code>\n"
+            f"╠═► 💾 <b>Newly Saved to Memory:</b> <code>{newly_saved}</code>\n"
+            f"╠═► ⏭️ <b>Already Saved (Skipped):</b> <code>{already_saved}</code>\n"
+            f"╠═► ⚠️ <b>Unresolved Titles:</b> <code>{unresolved}</code>\n"
+            f"╚══════════════════════════════════❍⊱❁۪۪\n"
+            + unresolved_note
+            + err_note
+            + f"\n💎 <i>Your {type_label.lower()} channels are now safely stored in permanent memory for quick 1-tap setups!</i>"
+        )
+
+        view_cb = f"ch_page:1:{ch_type}_view:{ch_type}"
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"📋 View Saved {type_label.capitalize()} Channels", callback_data=view_cb)],
+            [InlineKeyboardButton("🔙 Back to Watchers", callback_data="view_watchers_menu"),
+             InlineKeyboardButton("❌ Close", callback_data="ch_close")]
+        ])
+
+        await query.message.edit_text(result_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Error in watchers_import_callback: {e}", exc_info=True)
+        await query.answer("❌ Error occurred during watchers import. Please check logs.", show_alert=True)
+    finally:
+        IMPORT_LOCKS.discard(lock_key)
 
 @app.on_callback_query(filters.regex(r"^back_to_help$"))
 async def back_to_help_callback(client: Client, query: CallbackQuery):
@@ -3576,7 +3884,7 @@ async def watch_setup(client: Client, message: Message):
                 channel_type="source",
                 thread_id=source_thread_id
             ))
-            asyncio.create_task(auto_resolve_channel_title(client, user_id, cid_s, channel_type="source"))
+            asyncio.create_task(auto_resolve_channel_title(client, user_id, cid_s, channel_type="source", thread_id=thread_id))
     except Exception:
         pass
     
@@ -3800,7 +4108,7 @@ async def save(client: Client, message: Message):
                 channel_type="source",
                 thread_id=source_th
             ))
-            asyncio.create_task(auto_resolve_channel_title(client, user_id, source_cid, channel_type="source"))
+            asyncio.create_task(auto_resolve_channel_title(client, user_id, source_cid, channel_type="source", thread_id=src_thread_id))
     except Exception:
         pass
 
@@ -3963,7 +4271,7 @@ def parse_channel_input(raw_text: str):
         return None, None, None
     parts = text.split()
     target_spec = parts[0].strip()
-    custom_title = " ".join(parts[1:]).strip() if len(parts) > 1 else None
+    remaining_tokens = parts[1:]
     
     chat_id = None
     thread_id = None
@@ -3989,54 +4297,102 @@ def parse_channel_input(raw_text: str):
             raw_num = int(cid_str)
             if raw_num > 0 and raw_num > 10000000:
                 chat_id = int(f"-100{raw_num}")
-            elif not str(raw_num).startswith("-100"):
-                chat_id = int(f"-100{abs(raw_num)}")
             else:
                 chat_id = raw_num
+            if len(segs) > 1 and segs[1].strip().isdigit():
+                thread_id = int(segs[1].strip())
         else:
-            chat_id = cid_str.lstrip("@")
-        if len(segs) > 1 and segs[1].strip().isdigit():
-            thread_id = int(segs[1].strip())
+            chat_id = cid_str
+    elif target_spec.startswith("@"):
+        chat_id = target_spec.lstrip("@")
+    elif target_spec.lstrip("-").isdigit():
+        raw_num = int(target_spec)
+        if raw_num > 0 and raw_num > 10000000:
+            chat_id = int(f"-100{raw_num}")
+        else:
+            chat_id = raw_num
     else:
-        clean_num = target_spec.lstrip("-")
-        if clean_num.isdigit():
-            raw_num = int(target_spec)
-            if raw_num > 0 and raw_num > 10000000:
-                chat_id = int(f"-100{raw_num}")
-            elif not str(raw_num).startswith("-100"):
-                chat_id = int(f"-100{abs(raw_num)}")
-            else:
-                chat_id = raw_num
+        chat_id = target_spec
+
+    # Detect if second token is an explicit Topic ID (pure digits)
+    custom_title = None
+    if remaining_tokens:
+        if thread_id is None and remaining_tokens[0].isdigit() and len(remaining_tokens[0]) < 10:
+            thread_id = int(remaining_tokens[0])
+            title_tokens = remaining_tokens[1:]
         else:
-            chat_id = target_spec.lstrip("@")
-            
+            title_tokens = remaining_tokens
+
+        if title_tokens:
+            cand = " ".join(title_tokens).strip()
+            # If the custom title is just another channel ID, username, or URL accidentally pasted, ignore it
+            is_accidental = (
+                cand.startswith("http://")
+                or cand.startswith("https://")
+                or cand.startswith("t.me/")
+                or cand.startswith("@")
+                or (cand.lstrip("-").isdigit() and len(cand) > 6)
+            )
+            if not is_accidental and cand:
+                custom_title = cand
+
     return chat_id, thread_id, custom_title
 
-async def auto_resolve_channel_title(client: Client, user_id: int, channel_id, current_title: str = None, channel_type: str = "dest") -> str:
-    clean_title = (current_title or "").strip()
-    if clean_title and not clean_title.startswith("Chat ") and clean_title not in ["Target Chat", "Destination", "Unknown Destination", "Source"]:
-        return clean_title
-    resolved = None
+async def resolve_telegram_chat_title(client: Client, user_id: int, channel_id) -> tuple:
+    """
+    Attempts to resolve real Telegram chat title using bot client first, then user's active userbot.
+    Returns: (chat_object, resolved_title, resolved_by, error_message)
+    """
+    err_bot = None
+    err_user = None
+
+    # Tier 1: Try Bot Client
     try:
         chat = await client.get_chat(channel_id)
-        if chat and chat.title:
-            resolved = chat.title
-    except Exception:
-        if user_id in USER_CLIENTS and getattr(USER_CLIENTS[user_id], "is_connected", False):
-            try:
-                chat = await USER_CLIENTS[user_id].get_chat(channel_id)
-                if chat and chat.title:
-                    resolved = chat.title
-            except Exception:
-                pass
+        if chat:
+            t = chat.title or getattr(chat, "first_name", None) or getattr(chat, "username", None)
+            if t:
+                return chat, str(t).strip(), "bot", None
+    except Exception as e:
+        err_bot = str(e)
+
+    # Tier 2: Try Userbot Client (Fallback)
+    try:
+        u_client = await get_user_client(user_id)
+        if u_client:
+            chat = await u_client.get_chat(channel_id)
+            if chat:
+                t = chat.title or getattr(chat, "first_name", None) or getattr(chat, "username", None)
+                if t:
+                    return chat, str(t).strip(), "userbot", None
+    except Exception as ue:
+        err_user = str(ue)
+
+    comb_err = f"Bot: {err_bot or 'Unknown'} | Userbot: {err_user or 'Not connected or no access'}"
+    return None, None, None, comb_err
+
+async def auto_resolve_channel_title(client: Client, user_id: int, channel_id, current_title: str = None, channel_type: str = "dest", thread_id=None, force: bool = False) -> str:
+    clean_title = (current_title or "").strip()
+    is_generic = (
+        not clean_title
+        or clean_title.startswith("Chat ")
+        or clean_title.startswith("[Unresolved]")
+        or clean_title in ["Target Chat", "Destination", "Unknown Destination", "Source"]
+    )
+    if not is_generic and not force:
+        return clean_title
+
+    _, resolved, _, _ = await resolve_telegram_chat_title(client, user_id, channel_id)
     if resolved:
         try:
-            await db.save_channel(user_id, channel_id, resolved, channel_type=channel_type)
+            await db.update_channel_title(user_id, channel_id, resolved, channel_type=channel_type, thread_id=thread_id)
         except Exception:
             pass
         return resolved
-    return current_title or f"Chat {channel_id}"
 
+    if clean_title and not clean_title.startswith("Chat ") and not clean_title.startswith("[Unresolved]"):
+        return clean_title
+    return f"Chat {channel_id}"
 def build_channel_memory_ui(saved_channels: list, page: int = 1, page_size: int = 10, mode: str = "select", channel_type: str = "dest"):
     ch_type = str(channel_type or "dest").lower()
     total_channels = len(saved_channels)
@@ -4430,21 +4786,16 @@ async def process_custom_destination(client: Client, message: Message):
             return
 
         try:
-            try:
-                chat = await client.get_chat(dest_chat_id)
-            except Exception as e_bot:
-                if user_id in USER_CLIENTS and getattr(USER_CLIENTS[user_id], "is_connected", False):
-                    chat = await USER_CLIENTS[user_id].get_chat(dest_chat_id)
-                else:
-                    raise e_bot
-            title = custom_title or chat.title or getattr(chat, "first_name", None) or f"Chat {dest_chat_id}"
-            dest_chat_id = chat.id 
-            
+            chat, resolved_title, res_by, err_comb = await resolve_telegram_chat_title(client, user_id, dest_chat_id)
+            if not chat:
+                raise Exception(err_comb)
+            title = custom_title or resolved_title or f"Chat {dest_chat_id}"
+            dest_chat_id = chat.id
+
             if not getattr(chat, "is_forum", False):
                 dest_thread_id = None
-                
         except Exception as e:
-            await message.reply(f"❌ **Invalid Chat ID/Link** or I am not an admin there.\nError: `{e}`", quote=True)
+            await message.reply(f"❌ **Invalid Chat ID/Link** or neither bot nor userbot has access.\nError: `{e}`", quote=True)
             return
             
         wait_msg = await message.reply("🔄 **Testing destination access...**", quote=True)
@@ -4510,6 +4861,20 @@ async def channel_memory_page_callback(client: Client, query: CallbackQuery):
             page = int(match.group(4))
             mode = "view"
             ch_type = "dest"
+
+        # Normalise arguments
+        if mode in ["source", "dest"]:
+            mode, ch_type = ch_type, mode
+        elif ch_type not in ["source", "dest"]:
+            if "source" in str(mode).lower():
+                ch_type = "source"
+            elif "dest" in str(mode).lower():
+                ch_type = "dest"
+            else:
+                ch_type = "dest"
+
+        if page < 1:
+            page = 1
         
         saved_channels = await db.get_saved_channels(user_id, channel_type=ch_type)
         text, markup = build_channel_memory_ui(saved_channels, page=page, mode=mode, channel_type=ch_type)
@@ -4614,7 +4979,7 @@ async def channel_memory_watch_select_callback(client: Client, query: CallbackQu
 
     ch = await db.get_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type="source")
     raw_title = ch.get("channel_title") if ch else None
-    title = await auto_resolve_channel_title(client, user_id, channel_id, raw_title, channel_type="source")
+    title = await auto_resolve_channel_title(client, user_id, channel_id, raw_title, channel_type="source", thread_id=thread_id)
 
     # Generate canonical link representation for check_link_restriction
     clean_id = str(channel_id).replace("-100", "")
@@ -4712,7 +5077,7 @@ async def channel_memory_inspect_callback(client: Client, query: CallbackQuery):
 
     ch = await db.get_saved_channel(user_id, channel_id, thread_id=thread_id, channel_type=ch_type)
     raw_title = ch.get("channel_title") if ch else None
-    title = await auto_resolve_channel_title(client, user_id, channel_id, raw_title, channel_type=ch_type)
+    title = await auto_resolve_channel_title(client, user_id, channel_id, raw_title, channel_type=ch_type, thread_id=thread_id)
     use_count = ch.get("use_count", 1) if ch else 1
     last_used = ch.get("last_used") if ch else None
     last_used_str = last_used.strftime("%d-%b-%Y %I:%M %p") if isinstance(last_used, datetime.datetime) else "Recently"
@@ -4733,6 +5098,7 @@ async def channel_memory_inspect_callback(client: Client, query: CallbackQuery):
     buttons = []
     if is_source:
         buttons.append([InlineKeyboardButton("👀 Start Watching This Channel", callback_data=f"ch_watch_sel:{channel_id}:{thread_id or 0}")])
+    buttons.append([InlineKeyboardButton("🔄 Refresh Title", callback_data=f"ch_refresh:{channel_id}:{thread_id or 0}:{page}:{ch_type}")])
     buttons.append([InlineKeyboardButton(f"🗑️ Delete This {type_label.capitalize()} Channel", callback_data=f"ch_promptdel:{channel_id}:{thread_id or 0}:{page}:{ch_type}")])
     buttons.append([InlineKeyboardButton(f"🔙 Back to {type_label.capitalize()} Channels", callback_data=f"ch_page:{page}:{ch_type}_view:{ch_type}")])
 
@@ -4741,6 +5107,29 @@ async def channel_memory_inspect_callback(client: Client, query: CallbackQuery):
     except Exception:
         pass
     await query.answer()
+
+@app.on_callback_query(filters.regex(r"^ch_refresh:(-?\d+):?(\d+)?:?(\d+)?:?(\w+)?"))
+async def channel_memory_refresh_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not is_authorized(user_id):
+        return await query.answer("⛔ Access Denied.", show_alert=True)
+
+    match = query.matches[0]
+    channel_id = int(match.group(1))
+    thread_id = int(match.group(2)) if match.group(2) and match.group(2) != "0" else None
+    page = int(match.group(3)) if match.group(3) else 1
+    ch_type = match.group(4) or "dest"
+
+    await query.answer("🔄 Contacting Telegram servers to resolve real channel title...", show_alert=False)
+    new_title = await auto_resolve_channel_title(client, user_id, channel_id, current_title=None, channel_type=ch_type, thread_id=thread_id, force=True)
+
+    if new_title and not new_title.startswith("[Unresolved]") and not new_title.startswith("Chat "):
+        await query.answer(f"✅ Title resolved: {new_title[:40]}", show_alert=True)
+    else:
+        await query.answer("⚠️ Could not retrieve channel title. Make sure you or bot have joined the chat, or use /login.", show_alert=True)
+
+    # Re-render inspect card
+    await channel_memory_inspect_callback(client, query)
 
 @app.on_callback_query(filters.regex(r"^ch_promptdel:(-?\d+):?(\d+)?:?(\d+)?:?(\w+)?"))
 async def channel_memory_prompt_delete_callback(client: Client, query: CallbackQuery):
@@ -4862,7 +5251,7 @@ async def view_source_channels_command(client: Client, message: Message):
         ch_id = ch["channel_id"]
         t = ch.get("channel_title")
         if not t or t.startswith("Chat ") or t in ["Target Chat", "Destination", "Source"]:
-            asyncio.create_task(auto_resolve_channel_title(client, user_id, ch_id, t, channel_type="source"))
+            asyncio.create_task(auto_resolve_channel_title(client, user_id, ch_id, t, channel_type="source", thread_id=ch_th))
 
     text, markup = build_channel_memory_ui(saved_channels, page=1, mode="view", channel_type="source")
     await message.reply(text, reply_markup=markup, quote=True)
@@ -4897,7 +5286,7 @@ async def view_destination_channels_command(client: Client, message: Message):
         ch_id = ch["channel_id"]
         t = ch.get("channel_title")
         if not t or t.startswith("Chat ") or t in ["Target Chat", "Destination"]:
-            asyncio.create_task(auto_resolve_channel_title(client, user_id, ch_id, t, channel_type="dest"))
+            asyncio.create_task(auto_resolve_channel_title(client, user_id, ch_id, t, channel_type="dest", thread_id=ch_th))
 
     text, markup = build_channel_memory_ui(saved_channels, page=1, mode="view", channel_type="dest")
     await message.reply(text, reply_markup=markup, quote=True)
@@ -4957,26 +5346,20 @@ async def process_add_channel_submission(client: Client, message: Message, raw_i
 
     status_msg = await message.reply(f"🔄 <b>Auto-detecting {type_label.lower()} channel details...</b>", quote=True)
 
-    # 1. Auto-recognize channel title and details
+    # 1. Multi-tier channel title and details resolution
     real_chat = None
-    try:
-        real_chat = await client.get_chat(target_chat_id)
-    except Exception:
-        if user_id in USER_CLIENTS and getattr(USER_CLIENTS[user_id], "is_connected", False):
-            try:
-                real_chat = await USER_CLIENTS[user_id].get_chat(target_chat_id)
-            except Exception:
-                pass
-
-    if real_chat:
-        target_chat_id = real_chat.id
-        auto_title = real_chat.title or getattr(real_chat, "first_name", None) or f"Chat {real_chat.id}"
-        if not getattr(real_chat, "is_forum", False):
-            dest_thread_id = None
+    res_by = None
+    resolve_err = None
+    if not custom_title:
+        real_chat, auto_title, res_by, resolve_err = await resolve_telegram_chat_title(client, user_id, target_chat_id)
+        if real_chat:
+            target_chat_id = real_chat.id
+            if not getattr(real_chat, "is_forum", False):
+                dest_thread_id = None
     else:
         auto_title = None
 
-    final_title = custom_title or auto_title or f"Chat {target_chat_id}"
+    final_title = custom_title or auto_title or f"[Unresolved] Chat {target_chat_id}"
 
     # 2. Check permissions if destination
     has_access = True
@@ -5021,13 +5404,29 @@ async def process_add_channel_submission(client: Client, message: Message, raw_i
         else ""
     )
 
+    source_badge = ""
+    if custom_title:
+        source_badge = " <i>(Custom Title)</i>"
+    elif real_chat:
+        source_badge = f" <i>(via {res_by.capitalize()})</i>"
+
+    unresolved_warning = ""
+    if not custom_title and not real_chat:
+        unresolved_warning = (
+            f"\n⚠️ <b>Warning: Inaccessible Channel</b>\n"
+            f"Neither this bot nor your connected Telegram account has access to this chat.\n"
+            f"• <i>Saved with Channel ID so your configuration is retained.</i>\n"
+            f"• <i>Connect an account that has access via <code>/login</code> or join the chat to resolve real names.</i>\n"
+        )
+
     success_text = (
         f"🎉 <b>{type_label} CHANNEL SAVED TO MEMORY!</b>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        f"🏷️ <b>Channel Title:</b> <b>{html.escape(str(final_title))}</b>\n"
+        f"🏷️ <b>Channel Title:</b> <b>{html.escape(str(final_title))}</b>{source_badge}\n"
         f"🆔 <b>Channel ID:</b> <code>{target_chat_id}</code>\n"
         + (f"📌 <b>Topic ID:</b> <code>{dest_thread_id}</code>\n" if dest_thread_id else "")
         + admin_note
+        + unresolved_warning
         + f"\n📊 <b>Total {type_label.capitalize()} Channels in Memory:</b> <code>{total_saved}</code>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
         + help_note
