@@ -9,10 +9,10 @@ logger = logging.getLogger('RestrictBot')
 import traceback
 import math
 import html
-# === Python 3.12+ Event Loop Compatibility ===
+# === Python 3.10-3.14+ Event Loop Compatibility ===
 try:
-    loop = asyncio.get_event_loop_policy().get_event_loop()
-except Exception:
+    loop = asyncio.get_running_loop()
+except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -1547,7 +1547,7 @@ def generate_aesthetic_progress_ui(task_info: dict, current_status: str = "Forwa
     return text
 
 PROMO_NAMES_RAW = [
-    "Cloud Station", "TamilMob", "LinkZz", "ONAAMovies", "Hdhub4u", "Cinevood", "Vegamovies", "Bollyflix", "1XBET", "Melbet", "Olamovies", "MoviesMod", "Khatrimaza", "9xmovies", "Desiremovies", "HubFlix", "Bolly4u", "Bolly2tolly", "Filmyzilla", "Tamilrockers", "JioRockers", "Kuttymovies", "Moviesda", "4kHdHub",
+    "Cloud Station", "TamilMob", "LinkZz", "ONAAMovies", "Hdhub4u", "HDHub4u", "Hub4u", "HDHub", "HDHu", "Cinevood", "Vegamovies", "Bollyflix", "1XBET", "Melbet", "Olamovies", "MoviesMod", "Khatrimaza", "9xmovies", "Desiremovies", "HubFlix", "Bolly4u", "Bolly2tolly", "Filmyzilla", "Tamilrockers", "JioRockers", "Kuttymovies", "Moviesda", "4kHdHub",
     "KatMovieHD", "KatMovies", "MoviesFlix", "MoviesVerse", "MoviesVerseHD", "MoviesRulz", "MovieRulz", "TamilYogi", "TamilMV", "TamilGun", "TamilBlasters", "TamilPrint", "Tamilian", "Isaimini", "KuttyWeb", "SSRMovies", "SSRMovie", "TeluguWap", "Ibomma", "Movierulz", "Filmypur", "Filmy4wap", "Filmywap", "FilmyMeet", "MoviesPapa", "MoviesBaba", "MoviesJoy", "MoviesNation", "MoviesCrown", "MoviesCounter", "MoviesDrive", "Moviezwap", "MoviezWap", "Mp4Moviez", "World4uFree", "9xflix", "DownloadHub", "DownloadHub4u", "HDMoviesHub", "HDMovieArea", "HDMovie14", "HDMovie2", "HubMovies", "BollyShare", "BollyRulez", "Bolly4Wap", "BollyZone", "BollyWoodMovies", "Cinevez", "CineHub", "Cineplex", "CineBinge", "FilmHub", "FilmBolly", "MovieBox", "MovieBoxPro", "MovieVerse", "MovieRaja", "MoviePanda", "MovieKing", "MoviePapa", "MovieMaza", "MovieDokan", "MoviezAdda", "Bollyflix4u", "Filmyzilla4u", "MoviesModHD", "LinkZ", "4KHDHub"
 ]
 
@@ -1562,7 +1562,7 @@ for _pname in PROMO_NAMES_RAW:
 
 PROMO_DOMAINS_SUFFIX = r"(?:\.(?:com|in|to|org|net|me|live|cc|vip|tv|nl|eu|is|pro|tech|info|xyz|app|site|club|link|top|world|online|hub|store|ws|biz|click|fun|trade|icu|cfd|lol))?"
 PROMO_SPLIT_WORDS = [
-    "cloud", "station", "tamil", "mob", "link", "zz", "onaa", "movies", "hd", "hub", "4u",
+    "cloud", "station", "tamil", "mob", "link", "zz", "onaa", "movies", "hd", "hub", "4u", "hu",
     "cine", "vood", "vega", "bolly", "flix", "1xbet", "melbet", "ola", "mod", "khatri", "maza",
     "9x", "desire", "2tolly", "filmy", "zilla", "rockers", "jio", "kutty", "da", "4k", "kat",
     "verse", "rulz", "yogi", "mv", "gun", "blasters", "print", "ian", "isaimini", "web",
@@ -1595,6 +1595,125 @@ def _build_promo_regex():
     return re.compile(r'(?<![a-zA-Z0-9])(?:' + '|'.join(patterns) + r')(?![a-zA-Z0-9])', re.IGNORECASE)
 
 PROMO_NAME_REGEX = _build_promo_regex()
+
+# ==============================================================================
+# --- MEDIA FILTERING & SANITISATION ENGINE ---
+# ==============================================================================
+
+# Strict Blocklist Rule A: All 'Part' Keyword Split Files (001 to 999) - with or without extension
+# e.g., *.part001.ext, *part001.ext, * part001.ext, *.part001, part001 to part999
+BLOCK_PART_REGEX = re.compile(
+    r"part[._\s-]?(?:00[1-9]|0[1-9]\d|[1-9]\d{2})(?!\d)",
+    re.IGNORECASE
+)
+
+# Watermark Removal Regex (HDHub4u, Hub4u, HDHub, HDHu)
+WATERMARK_CLEAN_REGEX = re.compile(
+    r"(?i)(?:[@#]?\b(?:hdhub4u|hub4u|hdhub|hdhu)\b(?:[._-]?(?:com|org|net|in|top)\b)?|[\[\({][^\]\)}]*?(?:hdhub4u|hub4u|hdhub|hdhu)[^\]\)}]*?[\]\)}])"
+)
+
+def clean_promotional_watermarks(text: str) -> str:
+    """
+    Cleans target promotional watermarks (HDHub4u, Hub4u, HDHub, HDHu) and
+    surrounding brackets/tags, collapsing multiple spaces and trimming whitespace.
+    """
+    if not text:
+        return ""
+    cleaned = WATERMARK_CLEAN_REGEX.sub('', text)
+    cleaned = re.sub(r'(\s*-\s*)+', ' - ', cleaned)
+    cleaned = re.sub(r'[\s\-_–—|]+(?=\.[a-zA-Z0-9]+)', '', cleaned)
+    cleaned = re.sub(r'^\s*[-_–—|:.,\s]+', '', cleaned)
+    cleaned = re.sub(r'\s*[-_–—|:.,\s]+$', '', cleaned)
+    cleaned = re.sub(r'\s+(\.[a-zA-Z0-9]+(?:\.\d{2,4})?)', r'\1', cleaned)
+    cleaned = re.sub(r'\.{2,}', '.', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+    return cleaned
+
+def is_standalone_subtitle_file(filename: str) -> bool:
+    """
+    Identifies standalone subtitle files ending with .srt (case-insensitive).
+    """
+    if not filename:
+        return False
+    return filename.strip().lower().endswith(".srt") or bool(re.search(r"\.srt$", filename.strip(), re.IGNORECASE))
+
+def should_drop_file(filename: str) -> tuple[bool, str]:
+    """
+    Checks if a candidate filename matches the strict blocklist.
+    Returns (should_drop: bool, reason: str).
+    """
+    if not filename:
+        return False, ""
+    fn = filename.strip()
+    if is_standalone_subtitle_file(fn):
+        return True, "standalone_subtitle_srt"
+    if BLOCK_PART_REGEX.search(fn):
+        return True, "part_keyword_split"
+    return False, ""
+
+def extract_telegram_file_names(message) -> list[str]:
+    """
+    Inspects actual Telegram document metadata (DocumentAttributeFilename) across
+    document, video, audio, animation, and raw MTProto attributes, as well as text/caption.
+    """
+    names = []
+    if not message:
+        return names
+
+    # 1. Inspect Pyrogram media attributes & DocumentAttributeFilename
+    for media_type in ("document", "video", "audio", "animation"):
+        media = getattr(message, media_type, None)
+        if media:
+            fn = getattr(media, "file_name", None)
+            if fn and isinstance(fn, str) and fn.strip():
+                names.append(fn.strip())
+            attrs = getattr(media, "attributes", None) or []
+            for attr in attrs:
+                if isinstance(attr, raw.types.DocumentAttributeFilename) and getattr(attr, "file_name", None):
+                    names.append(attr.file_name.strip())
+                elif getattr(attr, "file_name", None) and isinstance(attr.file_name, str):
+                    names.append(attr.file_name.strip())
+
+    # 2. Inspect raw MTProto message attributes if present
+    raw_obj = getattr(message, "_raw", None) or getattr(message, "media", None)
+    if raw_obj:
+        doc = getattr(raw_obj, "document", None)
+        if doc and hasattr(doc, "attributes"):
+            for attr in getattr(doc, "attributes", []):
+                if isinstance(attr, raw.types.DocumentAttributeFilename) and getattr(attr, "file_name", None):
+                    names.append(attr.file_name.strip())
+                elif getattr(attr, "file_name", None) and isinstance(attr.file_name, str):
+                    names.append(attr.file_name.strip())
+
+    # 3. Caption / text lines inspection fallback
+    if getattr(message, "caption", None):
+        cap_str = message.caption.html if hasattr(message.caption, "html") else str(message.caption)
+        for line in cap_str.splitlines():
+            line_clean = re.sub(r'<[^>]+>', '', line).strip()
+            if line_clean:
+                names.append(line_clean)
+    elif getattr(message, "text", None):
+        txt_str = message.text.html if hasattr(message.text, "html") else str(message.text)
+        for line in txt_str.splitlines():
+            line_clean = re.sub(r'<[^>]+>', '', line).strip()
+            if line_clean:
+                names.append(line_clean)
+
+    return list(dict.fromkeys(names))
+
+def is_message_blocked(message) -> tuple[bool, str, str]:
+    """
+    Inspects Telegram document metadata (DocumentAttributeFilename) and evaluates against
+    the strict blocklist. Returns (is_blocked: bool, reason: str, matched_name: str).
+    """
+    if not message:
+        return False, "", ""
+    candidates = extract_telegram_file_names(message)
+    for fn in candidates:
+        dropped, reason = should_drop_file(fn)
+        if dropped:
+            return True, reason, fn
+    return False, "", ""
 
 UNAMBIGUOUS_EXTS = r'mkv|mp4|webm|m4v|flv|wmv|m4a|flac|7z'
 DELIMITED_ONLY_EXTS = r'avi|ts|avc|mp3|aac|wav|opus|ogg|zip|rar|tar|iso|apk|pdf'
@@ -1731,11 +1850,12 @@ def clean_promotional_hyperlinks(text_html: str) -> str:
 def clean_promotional_names(text: str) -> str:
     if not text:
         return ""
-    res = PROMO_NAME_REGEX.sub(" ", text)
+    res = clean_promotional_watermarks(text)
+    res = PROMO_NAME_REGEX.sub(" ", res)
     res = re.sub(r'(\.)\s*[\.\-_]\s*', r'\1', res)
     res = re.sub(r'([-_])\s*[-_]\s*', r'\1', res)
-    res = re.sub(r'\s*-\s*(?=\.[a-zA-Z0-9])', '', res)
-    res = re.sub(r'\s*\.\s*(?=\.[a-zA-Z0-9])', '', res)
+    res = re.sub(r'\s*-\s*(?=\.(?:' + ALL_MEDIA_EXTS + r'))', '', res, flags=re.IGNORECASE)
+    res = re.sub(r'\s*\.\s*(?=\.(?:' + ALL_MEDIA_EXTS + r'))', '', res, flags=re.IGNORECASE)
     res = re.sub(r' {2,}', ' ', res)
     return res.strip()
 
@@ -1791,13 +1911,12 @@ def sanitize_filename(filename: str) -> str:
     filename = re.sub(r'[\\/*?"<>|]', "", filename)
     
     stem, ext, split_suffix, _ = parse_media_extension_and_split(filename)
-    if not ext:
-        ext = ".dat"
 
     # Replace underscores with spaces
     stem = stem.replace('_', ' ')
 
-    # Remove promotional website/channel names
+    # Remove promotional website/channel names and target watermarks
+    stem = clean_promotional_watermarks(stem)
     stem = clean_promotional_names(stem)
 
     # Strip leading @usernames and leading promo brackets
@@ -1815,16 +1934,14 @@ def sanitize_filename(filename: str) -> str:
             break
 
     stem = re.sub(r'(@[a-zA-Z0-9_]+)\s*$', '', stem)
-
-    has_quality = bool(QUALITY_REGEX.search(stem))
-    if not has_quality and ext:
-        stem = stem.rstrip(' .-')
-        stem += " 720p"
-
     stem = stem.rstrip(' .-')
-    final_name = f"{stem}{ext}{split_suffix}"
+
+    if ext:
+        final_name = f"{stem}{ext}{split_suffix}"
+    else:
+        final_name = stem
     final_name = re.sub(r' {2,}', ' ', final_name).strip()
-    return final_name
+    return final_name or "unnamed_file.dat"
 
 def _process_media_line(line_html: str) -> tuple[str, bool]:
     stem, ext, split_suffix, closing_tags = parse_media_extension_and_split(line_html)
@@ -1832,6 +1949,7 @@ def _process_media_line(line_html: str) -> tuple[str, bool]:
         return line_html, False
 
     line_stem = stem.replace('_', ' ')
+    line_stem = clean_promotional_watermarks(line_stem)
     line_stem = clean_promotional_names(line_stem)
 
     while True:
@@ -1848,11 +1966,6 @@ def _process_media_line(line_html: str) -> tuple[str, bool]:
             break
 
     line_stem = re.sub(r'(@[a-zA-Z0-9_]+)(\s*(?:</[^>]+>)*\s*)$', r'\2', line_stem)
-
-    if not QUALITY_REGEX.search(line_stem) and ext:
-        line_stem = line_stem.rstrip(' .-')
-        line_stem += " 720p"
-
     line_stem = line_stem.rstrip(' .-')
     final_line = f"{line_stem}{ext}{split_suffix}{closing_tags}"
     final_line = re.sub(r' {2,}', ' ', final_line).strip()
@@ -1862,7 +1975,8 @@ def _process_media_line(line_html: str) -> tuple[str, bool]:
 def smart_caption(text_html, file_size_bytes=0):
     if not text_html: return ""
     
-    # 0. Clean hidden promotional links & URLs
+    # 0. Clean promotional watermarks and hidden promotional links & URLs
+    text_html = clean_promotional_watermarks(text_html)
     text_html = clean_promotional_hyperlinks(text_html)
 
     # 1. Remove existing footer if retried/fallback to prevent duplication
@@ -1893,11 +2007,11 @@ def smart_caption(text_html, file_size_bytes=0):
         if ok:
             lines = [new_text]
         else:
-            lines = [clean_promotional_names(l.replace('_', ' ')) for l in lines]
+            lines = [clean_promotional_watermarks(clean_promotional_names(l.replace('_', ' '))) for l in lines]
     else:
         for j in range(len(lines)):
             if j != media_idx:
-                lines[j] = clean_promotional_names(lines[j].replace('_', ' '))
+                lines[j] = clean_promotional_watermarks(clean_promotional_names(lines[j].replace('_', ' ')))
 
     # Filter out promotional lines, raw @usernames, or empty punctuation lines
     filtered_lines = []
@@ -1923,13 +2037,14 @@ def smart_caption(text_html, file_size_bytes=0):
         if re.match(r'^\s*@[a-zA-Z0-9_]+\s*$', plain):
             continue
 
-        cleaned_plain = clean_promotional_names(plain)
+        cleaned_plain = clean_promotional_watermarks(clean_promotional_names(plain))
         if re.match(r'^[⚜️✨🌟👉🔹🔸🔻🔺➡️✔️📢🔗:\-\[\]\(\)\s\\/]*$', cleaned_plain):
             continue
 
         filtered_lines.append(line)
 
     result = '\n'.join(filtered_lines)
+    result = clean_promotional_watermarks(result)
     result = re.sub(r' {2,}', ' ', result).strip()
     result = balance_html_tags(result)
     
@@ -2036,46 +2151,37 @@ def _split_file_smart(file_path, chunk_size):
     if file_size <= chunk_size:
         return [file_path]
 
-    if shutil.which("split"):
-        try:
-            output_prefix = f"{file_path}.part"
-            cmd = ["split", "-b", str(chunk_size), "-d", "-a", "3", str(file_path), output_prefix]
-            subprocess.run(cmd, check=True, capture_output=True)
-            parts = sorted(list(file_path.parent.glob(f"{file_path.name}.part*")))
-            if parts: return parts
-        except Exception: pass
-
-    seven_z_exe = shutil.which("7z") or shutil.which("7za")
-    if seven_z_exe:
-        try:
-            output_archive = f"{file_path}.7z"
-            cmd = [seven_z_exe, "a", f"-v{chunk_size}b", "-mx0", output_archive, str(file_path)]
-            subprocess.run(cmd, check=True, capture_output=True)
-            parts = sorted(list(file_path.parent.glob(f"{file_path.name}.7z.*")))
-            if parts: return parts
-        except Exception: pass
-
     part_num = 0
     parts = []
     buffer_size = 32 * 1024 * 1024 
     
-    with open(file_path, 'rb') as source:
-        while True:
-            part_name = file_path.parent / f"{file_path.name}.part{part_num:03d}"
-            current_chunk_size = 0
-            with open(part_name, 'wb') as dest:
-                while current_chunk_size < chunk_size:
-                    read_size = min(buffer_size, chunk_size - current_chunk_size)
-                    data = source.read(read_size)
-                    if not data: break
-                    dest.write(data)
-                    current_chunk_size += len(data)
-            if current_chunk_size == 0:
-                if part_name.exists(): part_name.unlink()
-                break
-            parts.append(part_name)
-            part_num += 1
-    return parts
+    # Generate splits as raw numeric chunks after extension (e.g. Movie.mkv.001)
+    # Fully whitelisted and compliant with Telegram forwarder split rules
+    try:
+        with open(file_path, 'rb') as source:
+            while True:
+                part_name = file_path.parent / f"{file_path.name}.{part_num + 1:03d}"
+                current_chunk_size = 0
+                with open(part_name, 'wb') as dest:
+                    while current_chunk_size < chunk_size:
+                        read_size = min(buffer_size, chunk_size - current_chunk_size)
+                        data = source.read(read_size)
+                        if not data: break
+                        dest.write(data)
+                        current_chunk_size += len(data)
+                if current_chunk_size == 0:
+                    if part_name.exists(): part_name.unlink()
+                    break
+                parts.append(part_name)
+                part_num += 1
+        return parts
+    except Exception:
+        for p in parts:
+            try:
+                if p.exists(): p.unlink()
+            except Exception:
+                pass
+        raise
 
 def progress(current, total, task_uuid, typ):
     if task_uuid and CANCEL_FLAGS.get(task_uuid):
@@ -6381,6 +6487,12 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
     if allowed_types is not None and msg_type not in allowed_types:
         return False, "filtered"
 
+    # 🛡️ STRICT FORWARDER FILTER: Drop part001-part999 splits & standalone .srt
+    is_blocked, block_reason, matched_name = is_message_blocked(msg)
+    if is_blocked:
+        print(f"🚫 [BATCH/LINK DROP] Dropping message {msgid} due to {block_reason}: '{matched_name}'")
+        return False, "filtered"
+
     if task_uuid and CANCEL_FLAGS.get(task_uuid): return False, "cancelled"
 
     try:
@@ -7293,6 +7405,21 @@ async def process_media_album(client, chat_id, media_group_id, watcher, targets)
     if not messages:
         return
 
+    # 🛡️ STRICT FORWARDER FILTER: Filter out blocked files from media album
+    filtered_messages = []
+    for m in messages:
+        blocked, reason, matched_fn = is_message_blocked(m)
+        if blocked:
+            print(f"🚫 [ALBUM DROP] Dropping item {m.id} from album {media_group_id} ({reason}: '{matched_fn}')")
+        else:
+            filtered_messages.append(m)
+
+    if not filtered_messages:
+        print(f"🚫 [ALBUM DROP] All items in album {media_group_id} blocked. Dropping album.")
+        return
+
+    messages = filtered_messages
+
     # Sort messages by message ID ascending to preserve correct media ordering
     messages.sort(key=lambda m: m.id)
 
@@ -7506,6 +7633,12 @@ async def process_watcher_message(client, message):
     if msg_type not in allowed_types: 
         return
 
+    # 🛡️ STRICT FORWARDER FILTER: Check Telegram metadata & blocklist
+    is_blocked, block_reason, matched_name = is_message_blocked(message)
+    if is_blocked:
+        print(f"🚫 [WATCHER DROP] Dropping message {message.id} due to {block_reason}: '{matched_name}'")
+        return
+
     delay = watcher.get('delay', 0)
     owner_id = watcher['user_id']
     is_restricted = watcher.get('is_restricted', False)
@@ -7648,6 +7781,14 @@ async def process_watcher_message(client, message):
                         try: 
                             await client.copy_message(chat_id=dest_id, from_chat_id=chat_id, message_id=message.id, reply_to_message_id=dest_thread, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                             success = True
+                        except FloodWait as fw2:
+                            await asyncio.sleep(fw2.value + 5)
+                            try:
+                                await client.copy_message(chat_id=dest_id, from_chat_id=chat_id, message_id=message.id, reply_to_message_id=dest_thread, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
+                                success = True
+                                await db.inc_forward_stats(owner_id, is_fast_copy=True, size_bytes=media_file_size)
+                                continue
+                            except Exception: pass
                         except Exception as e2:
                             try:
                                 fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
@@ -7688,6 +7829,16 @@ async def process_watcher_message(client, message):
                                                     caption=clean_caption,
                                                     parse_mode=enums.ParseMode.HTML
                                                 )
+                                            except FloodWait as fw_edit:
+                                                await asyncio.sleep(fw_edit.value + 5)
+                                                try:
+                                                    await client.edit_message_caption(
+                                                        chat_id=dest_id,
+                                                        message_id=new_msg_id,
+                                                        caption=clean_caption,
+                                                        parse_mode=enums.ParseMode.HTML
+                                                    )
+                                                except Exception: pass
                                             except Exception:
                                                 fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
                                                 await client.edit_message_caption(
