@@ -252,3 +252,4 @@ class TestMetadataInspection:
         )
         blocked, _, _ = is_message_blocked(msg)
         assert blocked is False
+
