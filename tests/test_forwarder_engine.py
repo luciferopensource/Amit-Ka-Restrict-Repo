@@ -30,6 +30,7 @@ from restrict_bot import (
     is_message_blocked,
     sanitize_filename,
     smart_caption,
+    strip_existing_media_footers,
     parse_media_extension_and_split
 )
 
@@ -204,6 +205,53 @@ class TestCaptionAndFilenameSanitisation:
         assert "luciferdatabase" not in cap.lower()
         assert "<a href=" not in cap.lower()
         assert "t.me" not in cap.lower()
+
+    def test_user_reported_promo_footer_stripped(self):
+        # 1. Plain title line
+        inp1 = (
+            "Mr.Queen S01 [E16 - E20] COMBINED 720p AMZN WEB - DL x264 [Hindi + Tamil + Telugu + Korean (AAC 2.0)] ESubs ~ NΛKϟU ~ TMV.mkv\n"
+            "💾 Size: 3.12 GB\n"
+            "⚜️ Powered By : [\\[ ᴍᴏᴠɪᴇꜱ ʙᴏᴛᴢ ᴜᴘᴅᴀᴛᴇ \\]](https://t.me/+wiERZq-x3KBmOGU9)"
+        )
+        cap1 = smart_caption(inp1, file_size_bytes=int(3.12 * 1024 * 1024 * 1024))
+        assert "movies botz" not in cap1.lower()
+        assert "ᴍᴏᴠɪᴇꜱ" not in cap1
+        assert "+wiERZq" not in cap1
+        assert "luciferdatabase" not in cap1.lower()
+        assert "<a href=" not in cap1.lower()
+        assert "t.me" not in cap1.lower()
+        assert "💾 Size: 3.12 GB" in cap1
+        assert "Mr.Queen S01" in cap1
+
+        # 2. Markdown-wrapped title with nested brackets and promotional link
+        inp2 = (
+            "[Mr.Queen S01 [E16 - E20] COMBINED 720p AMZN WEB - DL x264 [Hindi + Tamil + Telugu + Korean (AAC 2.0)] ESubs ~ NΛKϟU ~ TMV.mkv](https://t.me/+wiERZq-x3KBmOGU9)\n"
+            "💾 Size: 3.12 GB\n"
+            "⚜️ Powered By : [\\[ ᴍᴏᴠɪᴇꜱ ʙᴏᴛᴢ ᴜᴘᴅᴀᴛᴇ \\]](https://t.me/+wiERZq-x3KBmOGU9)"
+        )
+        cap2 = smart_caption(inp2, file_size_bytes=int(3.12 * 1024 * 1024 * 1024))
+        assert "movies botz" not in cap2.lower()
+        assert "ᴍᴏᴠɪᴇꜱ" not in cap2
+        assert "+wiERZq" not in cap2
+        assert "luciferdatabase" not in cap2.lower()
+        assert "<a href=" not in cap2.lower()
+        assert "t.me" not in cap2.lower()
+        assert "💾 Size: 3.12 GB" in cap2
+        assert "Mr.Queen S01" in cap2
+
+    @pytest.mark.parametrize("footer_text", [
+        "⚜️ Powered By : [\\[ ᴍᴏᴠɪᴇꜱ ʙᴏᴛᴢ ᴜᴘᴅᴀᴛᴇ \\]](https://t.me/+wiERZq-x3KBmOGU9)",
+        "⚜️ Powered By : <a href=\"https://t.me/+wiERZq-x3KBmOGU9\">[ ᴍᴏᴠɪᴇꜱ ʙᴏᴛᴢ ᴜᴘᴅᴀᴛᴇ ]</a>",
+        "⚜️ Powered By : [@luciferdatabase]",
+        "Powered By : Unknown Bot",
+        "💾 Size: 500 MB",
+        "Uploaded By : SomeChannel",
+        "🔗 Join @SomeChannel"
+    ])
+    def test_strip_existing_media_footers(self, footer_text):
+        raw = f"Movie 1080p.mkv\n{footer_text}"
+        res = strip_existing_media_footers(raw)
+        assert res == "Movie 1080p.mkv"
 
 
 class TestMetadataInspection:

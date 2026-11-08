@@ -21,3 +21,9 @@ AGENTS.md
 .env
 .env.*
 !.env.example
+
+# Phase 6: allow the project AGENTS.md to be versioned (exact file only)
+!AGENTS.md
+
+# Phase 9: allow the reconciled project memory file to be versioned (root file only)
+!PROJECT_MEMORY.md

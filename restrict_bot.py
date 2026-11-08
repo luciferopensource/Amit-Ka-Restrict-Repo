@@ -23,6 +23,7 @@ import gc
 import datetime
 import uuid
 import urllib.parse
+import unicodedata
 from pathlib import Path
 from collections import defaultdict
 import motor.motor_asyncio
@@ -1802,23 +1803,82 @@ PROMO_LINE_REGEX = re.compile(
 
 MD_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)')
 
+SMALL_CAPS_MAP = str.maketrans({
+    'ᴀ': 'a', 'ʙ': 'b', 'ᴄ': 'c', 'ᴅ': 'd', 'ᴇ': 'e', 'ғ': 'f', 'ɢ': 'g', 'ʜ': 'h',
+    'ɪ': 'i', 'ᴊ': 'j', 'ᴋ': 'k', 'ʟ': 'l', 'ᴍ': 'm', 'ɴ': 'n', 'ᴏ': 'o', 'ᴘ': 'p',
+    'ǫ': 'q', 'ʀ': 'r', 's': 's', 'ᴛ': 't', 'ᴜ': 'u', 'ᴠ': 'v', 'ᴡ': 'w', 'x': 'x',
+    'ʏ': 'y', 'ᴢ': 'z'
+})
+
+def normalize_fancy_unicode(text: str) -> str:
+    if not text:
+        return ""
+    normalized = unicodedata.normalize('NFKD', text)
+    return normalized.translate(SMALL_CAPS_MAP)
+
+PROMO_PHRASE_EXPANDED = re.compile(
+    r'\b(?:must\s*)?join\b|'
+    r'\b(?:subscribe|sub)\b|'
+    r'\b(?:telegram|tg)\s*(?:channel|group|link|bot)\b|'
+    r'\b(?:backup|official|main|update|daily)\s*(?:channel|group)\b|'
+    r'\b(?:powered\s*by|uploaded\s*by|shared\s*by|posted\s*by|credits?)\b|'
+    r'\b(?:click\s*here|download\s*now|direct\s*link)\b',
+    re.IGNORECASE
+)
+
 def clean_promotional_hyperlinks(text_html: str) -> str:
     if not text_html:
         return ""
+
+    # 0. Unwrap full-line markdown links where title contains nested brackets: [title](url)
+    lines = text_html.split('\n')
+    unwrapped_lines = []
+    for line in lines:
+        stripped = line.strip()
+        m_full = re.match(r'^\s*\[(?P<anchor>.*)\]\((?P<url>https?://[^\s\)]+)\)\s*$', stripped)
+        if m_full:
+            anc = m_full.group('anchor').strip()
+            href = m_full.group('url').strip()
+            if anc.startswith(r'\[') and anc.endswith(r'\]'):
+                anc = anc[2:-2].strip()
+            plain_anc = re.sub(r'<[^>]+>', '', anc).strip()
+            norm_anc = normalize_fancy_unicode(plain_anc)
+            _, ext, _, _ = parse_media_extension_and_split(plain_anc)
+            is_promo_anc = (
+                bool(PROMO_PHRASE_EXPANDED.search(norm_anc)) or 
+                bool(re.search(r'^@[a-zA-Z0-9_]+$', plain_anc)) or
+                bool(re.search(r'(?i)\b(?:powered\s*by|botz|update|channel|join|link)\b', norm_anc))
+            )
+            if is_promo_anc:
+                continue
+            if ext:
+                leading = line[:len(line) - len(line.lstrip())]
+                unwrapped_lines.append(leading + anc)
+            elif (PROMO_DOMAIN_REGEX.search(href) or re.search(r'(?i)\b(?:t\.me|telegram\.me|telegram\.dog)\b', href)):
+                continue
+            else:
+                unwrapped_lines.append(line)
+        else:
+            unwrapped_lines.append(line)
+    text_html = '\n'.join(unwrapped_lines)
 
     # 1. Unwrap raw markdown links [anchor](url)
     def replace_md_link(match):
         anchor = match.group(1).strip()
         href = match.group(2).strip()
         plain_anchor = re.sub(r'<[^>]+>', '', anchor).strip()
+        norm_anchor = normalize_fancy_unicode(plain_anchor)
         cleaned_anchor = clean_promotional_names(plain_anchor).strip()
+        _, ext, _, _ = parse_media_extension_and_split(plain_anchor)
         is_promo_anchor = (
-            bool(PROMO_PHRASES_REGEX.search(plain_anchor)) or 
+            bool(PROMO_PHRASE_EXPANDED.search(norm_anchor)) or 
             bool(re.search(r'^@[a-zA-Z0-9_]+$', plain_anchor)) or
             cleaned_anchor == "" or
-            bool(re.match(r'^[⚜️✨🌟👉🔹🔸🔻🔺➡️✔️📢🔗:\-\[\]\(\)\s\\/]*$', cleaned_anchor))
+            bool(re.match(r'^[⚜️✨🌟👉🔹🔸🔻🔺➡️✔️📢🔗➥➔➜➤➢►▶⏩🔔🏷📌🎬🍿🔥⚡:\-\[\]\(\)\s\\/]*$', cleaned_anchor))
         )
         if is_promo_anchor:
+            return ""
+        if not ext and (PROMO_DOMAIN_REGEX.search(href) or re.search(r'(?i)\b(?:t\.me|telegram\.me|telegram\.dog)\b', href)):
             return ""
         return anchor
 
@@ -1859,6 +1919,24 @@ def clean_promotional_names(text: str) -> str:
     res = re.sub(r' {2,}', ' ', res)
     return res.strip()
 
+def strip_existing_media_footers(caption: str) -> str:
+    """
+    Strips pre-existing footers (File Size, Join links, and ANY Powered By / Uploaded By / Credits
+    promotions regardless of source bot, Unicode fonts, emojis, HTML, or markdown formatting).
+    """
+    if not caption:
+        return ""
+    # Strip any file size line (e.g. 💾 Size: 3.12 GB)
+    caption = re.sub(r'(?im)^\s*💾?\s*(?:size|file\s*size)\s*[:\-–—]?\s*[^\n]*$', '', caption)
+    # Strip any join/link promotional line
+    caption = re.sub(r'(?im)^\s*[🔗👉📢\s]*(?:join|link|channel|backup)\b[^\n]*$', '', caption)
+    # Strip any Powered By / Uploaded By / Shared By / Credits line
+    caption = re.sub(r'(?im)^\s*[⚜️✨🌟👉🔹🔸🔻🔺➡️✔️📢🔗\s]*(?:powered\s*by|uploaded\s*by|shared\s*by|posted\s*by|credits?)\s*[:\-–—]?\s*[^\n]*$', '', caption)
+    # Strip any residual Powered By with markdown or HTML links
+    caption = re.sub(r'\n*\s*⚜️?\s*(?:powered\s*by|uploaded\s*by|shared\s*by|posted\s*by|credits?)\s*[:\-–—]?\s*(?:<a\s+[^>]*>)?\[?[^\]\n]*\]?(?:</a>)?(?:\([^\)\n]*\))?[^\n]*', '', caption, flags=re.IGNORECASE)
+    caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
+    return caption
+
 def format_file_size(size_bytes: int | float) -> str:
     try:
         n = float(size_bytes)
@@ -1879,10 +1957,7 @@ def append_media_footer(caption: str, file_size_bytes: int = 0) -> str:
     if not caption:
         caption = ""
     # Strip any pre-existing footer to prevent duplication across retries/fallbacks/targets
-    caption = re.sub(r'\n*\s*💾\s*Size:[^\n]*', '', caption, flags=re.IGNORECASE)
-    caption = re.sub(r'\n*\s*🔗\s*(?:Join|Link)[^\n]*', '', caption, flags=re.IGNORECASE)
-    caption = re.sub(r'\n*\s*⚜️\s*Powered\s*By[^\n]*', '', caption, flags=re.IGNORECASE)
-    caption = caption.strip()
+    caption = strip_existing_media_footers(caption)
 
     if file_size_bytes > 0:
         size_str = format_file_size(file_size_bytes)
@@ -1898,9 +1973,7 @@ def append_media_footer(caption: str, file_size_bytes: int = 0) -> str:
     return f"{caption}{footer}"
 
 def prepare_caption_fallback(caption: str, file_size_bytes: int = 0) -> str:
-    caption = re.sub(r'\n*\s*💾\s*Size:[^\n]*', '', caption, flags=re.IGNORECASE)
-    caption = re.sub(r'\n*\s*🔗\s*(?:Join|Link)[^\n]*', '', caption, flags=re.IGNORECASE)
-    caption = re.sub(r'\n*\s*⚜️\s*Powered\s*By[^\n]*', '', caption, flags=re.IGNORECASE)
+    caption = strip_existing_media_footers(caption)
     plain = re.sub(r'<[^>]+>', '', caption).strip()
     return append_media_footer(plain, file_size_bytes)
 
@@ -1979,11 +2052,8 @@ def smart_caption(text_html, file_size_bytes=0):
     text_html = clean_promotional_watermarks(text_html)
     text_html = clean_promotional_hyperlinks(text_html)
 
-    # 1. Remove existing footer if retried/fallback to prevent duplication
-    text_html = re.sub(r'\n*\s*💾\s*Size:[^\n]*', '', text_html, flags=re.IGNORECASE)
-    text_html = re.sub(r'\n*\s*🔗\s*(?:Join|Link)[^\n]*', '', text_html, flags=re.IGNORECASE)
-    text_html = re.sub(r'\n*\s*⚜️\s*Powered\s*By[^\n]*', '', text_html, flags=re.IGNORECASE)
-    text_html = text_html.strip()
+    # 1. Strip pre-existing footers (any Powered By, Size, or Join links)
+    text_html = strip_existing_media_footers(text_html)
 
     # 2. Process multiline captions preserving formatting
     lines = text_html.split('\n')
@@ -2015,30 +2085,40 @@ def smart_caption(text_html, file_size_bytes=0):
 
     # Filter out promotional lines, raw @usernames, or empty punctuation lines
     filtered_lines = []
-    for line in lines:
+    for idx, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
             if filtered_lines and filtered_lines[-1] != "":
                 filtered_lines.append("")
             continue
 
+        if idx == media_idx and transformed:
+            filtered_lines.append(line)
+            continue
+
         plain = re.sub(r'<[^>]+>', '', stripped).strip()
         if not plain:
             continue
 
-        # Match promo line regex on plain text and after stripping leading emoji/bracket decorations
-        clean_prefix = re.sub(r'^[\[\(\s⚜️✨🌟👉🔹🔸🔻🔺➡️✔️📢🔗]+', '', plain)
-        if PROMO_LINE_REGEX.match(plain) or PROMO_LINE_REGEX.match(clean_prefix):
+        norm_plain = normalize_fancy_unicode(plain)
+        clean_prefix = re.sub(r'^[\s\[\(⚜️✨🌟👉🔹🔸🔻🔺➡️✔️📢🔗➥➔➜➤➢►▶⏩🔔🏷📌🎬🍿🔥⚡:\-–—]+', '', norm_plain)
+
+        if (
+            PROMO_LINE_REGEX.match(norm_plain) or 
+            PROMO_LINE_REGEX.match(clean_prefix) or
+            PROMO_PHRASE_EXPANDED.search(norm_plain) or
+            PROMO_PHRASE_EXPANDED.search(clean_prefix)
+        ):
             continue
 
-        if PROMO_DOMAIN_REGEX.search(plain) or re.search(r'(?i)\b(?:t\.me|telegram\.me)\b', plain):
+        if PROMO_DOMAIN_REGEX.search(plain) or re.search(r'(?i)\b(?:t\.me|telegram\.me|telegram\.dog)\b', plain):
             continue
 
         if re.match(r'^\s*@[a-zA-Z0-9_]+\s*$', plain):
             continue
 
         cleaned_plain = clean_promotional_watermarks(clean_promotional_names(plain))
-        if re.match(r'^[⚜️✨🌟👉🔹🔸🔻🔺➡️✔️📢🔗:\-\[\]\(\)\s\\/]*$', cleaned_plain):
+        if re.match(r'^[⚜️✨🌟👉🔹🔸🔻🔺➡️✔️📢🔗➥➔➜➤➢►▶⏩🔔🏷📌🎬🍿🔥⚡:\-\[\]\(\)\s\\/]*$', cleaned_plain):
             continue
 
         filtered_lines.append(line)
