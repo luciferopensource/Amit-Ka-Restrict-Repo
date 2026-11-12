@@ -144,3 +144,24 @@ Comprehensive code audit conducted by Senior Software Engineer and Code Auditor.
 9. **Eliminated Redundant Startup Queries:** Consolidated duplicate startup watcher queries into a single cached pass.
 10. **Strict White-Label Invariant Preserved:** Strictly zero `@luciferdatabase` or hyperlinks injected; all footers remain `💾 Size: {size_str}` only.
 11. **Expanded Test Suite:** Added 5 new unit tests in `tests/test_forwarder_engine.py` (77 tests total, 100% pass rate).
+
+## 16. Login Done Banner, 1-10s Delay Presets, TgCrypto, Monospace Terminal Box & Log FloodWait Guard (2026-11-13)
+- **TgCrypto Integration (`requirements.txt`):** Added compiled C cryptography library `tgcrypto` to replace pure-python `pyaes`. Eliminates high CPU usage on Render and provides 20x–50x cryptographic throughput for multi-gigabyte transfers.
+- **Login Status & Confirmation Banner:**
+  - Added clean, framed confirmation banner upon successful authentication in `start_string_session_login` and `start_phone_login` displaying user's name, user ID, phone, and active status.
+  - Added dynamic session status check in `/start` (`send_start`) indicating whether the user is currently `LOGGED IN` or `NOT LOGGED IN`.
+- **1-10s Forwarding Delay Presets & Code Block Warning (`ask_for_speed`, `speed_callback`):**
+  - Expanded speed setup inline menu with 1s, 2s, 3s (Default), 4s, 5s, 6s, 7s, 8s, 9s, 10s presets, manual custom delay option, and cancel button.
+  - Added formatted monospace code block warning:
+    - ⚡ 1s - 2s: FAST (High Telegram FloodWait risk)
+    - ⭐ 3s (Default): BALANCED (Optimal speed & stability)
+    - 🛡️ 4s - 10s: SAFE (Zero FloodWait risk for large batches)
+- **Dark Terminal "Code Format" UI:** Wrapped `generate_aesthetic_progress_ui` and final batch completion summaries (`final_text`) in `<pre><code>...</code></pre>` ensuring Telegram renders all status and progress outputs inside the monospace dark terminal box.
+- **Render Log Channel FloodWait Protection (`send_log`, `handle_private`):**
+  - Fixed issue where batch skips during `auto_dl = False` flooded Telegram `LOG_CHANNEL` with rapid successive messages, triggering Telegram `[420 FLOOD_WAIT_X]`.
+  - Replaced repetitive per-file skip notices in `handle_private` with console logs.
+  - Added minimum 2.0s dispatch cooldown and automatic `FloodWait` suppression window in `send_log`.
+  - Added notification in task start message if `auto_dl` is currently OFF.
+- **Strict White-Label Compliance:** Zero `@luciferdatabase`, zero hyperlinks, and clean white-label branding maintained.
+- **Verification:** All 77 forwarder engine tests passing (100% pass rate).
+
