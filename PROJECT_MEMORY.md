@@ -129,3 +129,18 @@ The project is deliberately monolithic: one module, ordered sections, no package
 - **Markdown Title Unwrapping:** Updated `clean_promotional_hyperlinks()` to unwrap full-line markdown titles with nested brackets, preserving filenames cleanly.
 - **Strict White-Label Compliance:** Appends only `💾 Size: {size_str}` without any personal channels, `@luciferdatabase` branding, or hyperlinks.
 - **Test Suite Verification:** Ran `pytest tests/test_forwarder_engine.py`; 72/72 tests passed (100% pass rate).
+
+## 15. Codebase Audit & Defect Remediation (2026-11-12)
+
+Comprehensive code audit conducted by Senior Software Engineer and Code Auditor. Remediated actionable defects tailored strictly for the white-label environment:
+1. **False Positive Media Drop Prevention:** Fixed `extract_telegram_file_names` to only inspect caption/text fallback if no document attribute filenames exist. Movies with `Subtitles: English.srt` in caption are no longer dropped.
+2. **LIFO Stack-Based HTML Tag Balancer:** Upgraded `balance_html_tags` to parse HTML tags in a true LIFO stack order, safely closing unclosed `<a>`, `<b>`, `<i>`, `<code>`, `<u>`, `<s>`, `<pre>` and dropping orphan closing tags to prevent Telegram MTProto entity parse errors.
+3. **Iterative Truncation Backoff:** Implemented safe iterative backoff in `append_media_footer` ensuring `len(caption) + len(footer) <= 1024` with balanced HTML tags.
+4. **Whole URL Cleansing:** Fixed `clean_promotional_hyperlinks` to remove full URLs without leaving dangling `https://` schemes.
+5. **Bracket-Aware Markdown Link Unwrapping:** Replaced greedy markdown regexes with bracket-aware non-greedy patterns.
+6. **Title Hyphen Normalisation Protection:** Modified `clean_promotional_watermarks` to only collapse consecutive hyphens (`{2,}`), protecting legitimate titles like `Spider-Man` and `WEB-DL`.
+7. **Offline DB Safety Guard:** Guarded `db.db.watchers` calls when database is offline in dashboard and startup routines.
+8. **Asynchronous Album Cleanup:** Offloaded blocking `shutil.rmtree` to `asyncio.to_thread`.
+9. **Eliminated Redundant Startup Queries:** Consolidated duplicate startup watcher queries into a single cached pass.
+10. **Strict White-Label Invariant Preserved:** Strictly zero `@luciferdatabase` or hyperlinks injected; all footers remain `💾 Size: {size_str}` only.
+11. **Expanded Test Suite:** Added 5 new unit tests in `tests/test_forwarder_engine.py` (77 tests total, 100% pass rate).

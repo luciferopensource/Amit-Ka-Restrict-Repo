@@ -31,7 +31,10 @@ from restrict_bot import (
     sanitize_filename,
     smart_caption,
     strip_existing_media_footers,
-    parse_media_extension_and_split
+    parse_media_extension_and_split,
+    balance_html_tags,
+    clean_promotional_hyperlinks,
+    append_media_footer
 )
 
 # --- MOCK MESSAGE HELPERS FOR METADATA INSPECTION ---
@@ -300,4 +303,61 @@ class TestMetadataInspection:
         )
         blocked, _, _ = is_message_blocked(msg)
         assert blocked is False
+
+    def test_movie_with_srt_in_caption_not_blocked(self):
+        """
+        Verify that a legitimate movie file is NOT blocked just because the
+        description/caption mentions subtitles (e.g. 'Subtitles: English.srt').
+        """
+        msg = MockMessage(
+            video=MockMedia(
+                file_name="Dune.2021.1080p.mkv",
+                attributes=[MockDocumentAttributeFilename(file_name="Dune.2021.1080p.mkv")]
+            ),
+            caption="🎬 Dune (2021) 1080p\nSubtitles: English.srt included."
+        )
+        blocked, reason, matched = is_message_blocked(msg)
+        assert blocked is False
+        assert reason == ""
+
+
+class TestAuditedEdgeCases:
+    """
+    Unit tests verifying fixes for the 12 audited codebase defects in white-label environment.
+    """
+
+    def test_balance_html_tags_with_anchor_and_orphans(self):
+        # 1. Unclosed <a>
+        raw = '<b>Hello <a href="https://example.com">World'
+        balanced = balance_html_tags(raw)
+        assert balanced == '<b>Hello <a href="https://example.com">World</a></b>'
+
+        # 2. Orphaned closing tag
+        raw_orphan = 'Hello</b> World'
+        balanced_orphan = balance_html_tags(raw_orphan)
+        assert balanced_orphan == 'Hello World'
+
+    def test_clean_promotional_hyperlinks_no_dangling_https(self):
+        raw = "Check this movie out: https://t.me/somechannel or https://hdhub4u.com/download"
+        res = clean_promotional_hyperlinks(raw)
+        assert "https://" not in res
+        assert "t.me" not in res
+        assert "hdhub4u" not in res
+        assert "@luciferdatabase" not in res
+
+    def test_multi_markdown_links_on_single_line_not_corrupted(self):
+        raw = "[Link1](https://t.me/channel1) and [Link2](https://t.me/channel2)"
+        res = clean_promotional_hyperlinks(raw)
+        assert "t.me" not in res
+        assert "https://" not in res
+
+    def test_caption_truncation_rebalances_html(self):
+        long_text = "<b><a href=\"https://example.com\">" + ("A" * 1050) + "</a></b>"
+        res = append_media_footer(long_text, file_size_bytes=1024*1024*50)
+        assert len(res) <= 1024
+        assert "💾 Size: 50.00 MB" in res
+        assert res.count("<b>") == res.count("</b>")
+        assert res.count("<a") == res.count("</a>")
+        assert "@luciferdatabase" not in res
+
 
