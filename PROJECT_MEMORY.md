@@ -180,5 +180,6 @@ Comprehensive code audit conducted by Senior Software Engineer and Code Auditor.
 - **4-tier fast-copy:** bot copy → userbot copy → bridge via bot DM → download fallback. The bridge reads from the userbot account id (`acc.me.id`), so multi-account logins work.
 - **Inline keyboards stripped:** source `reply_markup` is never copied, so no promotional buttons reach white-label destinations.
 - **White-label invariant retained:** no `@luciferdatabase` hyperlink or Powered By footer; captions carry `💾 Size:` only.
-- **Verification:** `pytest tests/test_forwarder_engine.py` — 81 passed (2026-11-13).
+- **Text formatting:** Bold/Italic wrap the caption; Mono strips any residual links before `<code>`.
+- **Verification:** `pytest tests/test_forwarder_engine.py` — 83 passed (2026-11-13).
 
