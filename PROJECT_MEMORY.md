@@ -165,3 +165,15 @@ Comprehensive code audit conducted by Senior Software Engineer and Code Auditor.
 - **Strict White-Label Compliance:** Zero `@luciferdatabase`, zero hyperlinks, and clean white-label branding maintained.
 - **Verification:** All 77 forwarder engine tests passing (100% pass rate).
 
+## 17. Audit Fixes — Tenant Isolation, Albums and Resource Guards (2026-11-13)
+
+- **Watcher isolation:** watchers are now keyed by `(user_id, source_id, source_thread)`. `add_watcher()` includes the owning `user_id` in its query and `get_watcher()` accepts it, while the watcher handler resolves the owner from `USER_CLIENTS`. Two users watching the same source can no longer merge routes or send through each other's session.
+- **Album filtering:** `process_media_album()` now applies `allowed_types`; albums previously bypassed the content-type filter entirely.
+- **Cleanup watchdog:** skips folders that belong to an active task (`ACTIVE_PROCESSES`) and only removes scratch data older than 6 hours (was 2 hours, which could delete a running batch).
+- **Disk guards:** default headroom raised from 500 MB to 1.5 GB, plus a per-item pre-download check requiring 115% of the file size.
+- **Startup visibility:** index-initialisation and watcher-restore failures are logged (and sent to `LOG_CHANNEL`) instead of being swallowed; a warning is emitted when no `ADMINS`/`AUTH_USERS` are configured.
+- **String-session login:** stores the API credentials actually used for validation instead of the possibly-empty bot globals.
+- **Caption fallback:** filename extraction only inspects caption lines for file-bearing media, so text posts mentioning `*.srt` are no longer dropped.
+- **White-label invariant retained:** no `@luciferdatabase` hyperlink or Powered By footer; captions carry `💾 Size:` only.
+- **Verification:** `pytest tests/test_forwarder_engine.py` — 79 passed (2026-11-13).
+

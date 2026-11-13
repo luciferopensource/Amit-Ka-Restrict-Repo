@@ -320,6 +320,19 @@ class TestMetadataInspection:
         assert blocked is False
         assert reason == ""
 
+    def test_text_post_mentioning_srt_not_blocked(self):
+        """A plain text post that only mentions a .srt file has no media to block."""
+        msg = MockMessage(text="Subtitles: English.srt available on request")
+        blocked, reason, matched = is_message_blocked(msg)
+        assert blocked is False
+
+    def test_footer_never_contains_lucifer_branding(self):
+        """White-label invariant: captions must never carry the personal channel branding."""
+        out = append_media_footer(smart_caption("Neelpodmo (2025) 1080p.mkv"), 1024 ** 3)
+        assert "luciferdatabase" not in out.lower()
+        assert "<a href" not in out
+        assert "💾 Size: 1.00 GB" in out
+
 
 class TestAuditedEdgeCases:
     """
