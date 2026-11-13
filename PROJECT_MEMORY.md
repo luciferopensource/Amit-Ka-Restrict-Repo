@@ -174,6 +174,8 @@ Comprehensive code audit conducted by Senior Software Engineer and Code Auditor.
 - **Startup visibility:** index-initialisation and watcher-restore failures are logged (and sent to `LOG_CHANNEL`) instead of being swallowed; a warning is emitted when no `ADMINS`/`AUTH_USERS` are configured.
 - **String-session login:** stores the API credentials actually used for validation instead of the possibly-empty bot globals.
 - **Caption fallback:** filename extraction only inspects caption lines for file-bearing media, so text posts mentioning `*.srt` are no longer dropped.
+- **White-label caption guard:** `strip_whitelabel_references()` removes `@LuciferDatabase` / `@RequestLuciferDatabase`, `DB ID` lines and residual promo lines from incoming captions, so even a caption copied from the personal cloud engine arrives fully clean. Media filename lines are protected from the filter.
+- **No duplicate size:** `append_media_footer()` skips the size footer when the source caption already carries one.
 - **White-label invariant retained:** no `@luciferdatabase` hyperlink or Powered By footer; captions carry `💾 Size:` only.
-- **Verification:** `pytest tests/test_forwarder_engine.py` — 79 passed (2026-11-13).
+- **Verification:** `pytest tests/test_forwarder_engine.py` — 81 passed (2026-11-13).
 

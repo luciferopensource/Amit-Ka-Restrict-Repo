@@ -333,6 +333,35 @@ class TestMetadataInspection:
         assert "<a href" not in out
         assert "💾 Size: 1.00 GB" in out
 
+    def test_cloud_style_caption_fully_whitelabelled(self):
+        """A caption copied from the personal cloud engine must arrive fully clean."""
+        sample = (
+            "🎬 File Name: Neelpodmo (2025) Bengali iScreen WEB-DL 1080p.mkv\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "💾 DB ID: [@LuciferDatabase] | 🌐 Source: WEB-DL\n"
+            "⚖️ Size: 1.91 GB | 🎬 Format: MKV | ⚙️ Codec: WEB-DL\n"
+            "📺 Resolution: 1080p\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "📢 Join: @LuciferDatabase for fast downloads & Database access.\n"
+            "❓ Need a File? Request: [@RequestLuciferDatabase]"
+        )
+        out = append_media_footer(smart_caption(sample), 1024 ** 3)
+        assert "luciferdatabase" not in out.lower()
+        assert "<a href" not in out
+        assert "Powered By" not in out
+        assert "DB ID" not in out
+        assert out.count("Size:") == 1
+
+    def test_filename_containing_promo_word_is_preserved(self):
+        sample = (
+            "🎬 File Name: Request Movie (2024) 1080p.mkv\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "💾 DB ID: [@LuciferDatabase]\n"
+            "⚖️ Size: 1.91 GB"
+        )
+        out = smart_caption(sample)
+        assert "Request Movie (2024) 1080p.mkv" in out
+
 
 class TestAuditedEdgeCases:
     """

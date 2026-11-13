@@ -1972,6 +1972,56 @@ def clean_promotional_names(text: str) -> str:
     res = re.sub(r' {2,}', ' ', res)
     return res.strip()
 
+# --- WHITE-LABEL GUARD: remove every reference to the personal Lucifer channels ---
+LUCIFER_REF_REGEX = re.compile(r'(?i)\[?\s*@?\s*(?:request)?lucifer\s*database\s*\]?')
+
+
+def strip_whitelabel_references(caption: str) -> str:
+    """Removes @LuciferDatabase / @RequestLuciferDatabase references and DB ID lines."""
+    if not caption:
+        return ""
+    had_ref = bool(LUCIFER_REF_REGEX.search(caption)) or bool(re.search(r'(?i)DB\s*ID\s*:', caption))
+    # Unwrap hyperlinks that point at the personal database channels
+    caption = re.sub(
+        r'''(?is)<a\s+[^>]*href=["'][^"']*t\.me/(?:lucifer)?database[^"']*["'][^>]*>(.*?)</a>''',
+        r'\1', caption
+    )
+    caption = re.sub(r'(?i)https?://t\.me/(?:lucifer)?database\S*', '', caption)
+    # Remove the handle itself (with or without brackets)
+    caption = LUCIFER_REF_REGEX.sub('', caption)
+    # Drop the DB ID line entirely (it only exists to point at the personal database)
+    caption = re.sub(r'(?im)^\s*💾?\s*DB\s*ID\s*:[^\n]*$', '', caption)
+    # Drop request lines left meaningless after the handle removal
+    caption = re.sub(r'(?im)^\s*❓?\s*Need a File\??\s*Request\s*:?\s*$', '', caption)
+    # Drop residual promo lines that only existed to advertise the personal channels
+    if had_ref:
+        kept_lines = []
+        for line in caption.splitlines():
+            stripped_line = line.strip()
+            # Keep structural divider lines
+            if stripped_line and set(stripped_line) <= set("━─═-— "):
+                kept_lines.append(line)
+                continue
+            # Never touch a media filename line
+            if re.search(r'(?i)\.(?:mkv|mp4|avi|webm|m4v|ts|mov|flv|wmv|m4a|mp3|aac|flac|wav|opus|ogg|zip|rar|7z|pdf)\b', line):
+                kept_lines.append(line)
+                continue
+            plain = re.sub(r'<[^>]+>', '', line)
+            plain = re.sub(r'[^\w]+', ' ', plain, flags=re.UNICODE).strip()
+            if not plain:
+                continue
+            if re.search(r'(?i)\b(?:join|database access|fast downloads|need a file|request)\b', plain):
+                continue
+            kept_lines.append(line)
+        caption = '\n'.join(kept_lines)
+    # Tidy leftovers
+    caption = re.sub(r'[ \t]{2,}', ' ', caption)
+    caption = re.sub(r'(?m)^\s*[|·•\-–—:]+\s*$', '', caption)
+    caption = re.sub(r'(?m)(━{5,})\s*\n\s*\1', r'\1', caption)
+    caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
+    return caption
+
+
 def strip_existing_media_footers(caption: str) -> str:
     """
     Strips pre-existing footers (File Size, Join links, and ANY Powered By / Uploaded By / Credits
@@ -2012,7 +2062,8 @@ def append_media_footer(caption: str, file_size_bytes: int = 0) -> str:
     # Strip any pre-existing footer to prevent duplication across retries/fallbacks/targets
     caption = strip_existing_media_footers(caption)
 
-    if file_size_bytes > 0:
+    # Do not duplicate a size line that the source caption already carries
+    if file_size_bytes > 0 and not re.search(r'(?i)[💾⚖️]?\s*Size\s*:', caption):
         size_str = format_file_size(file_size_bytes)
         footer = f"\n\n💾 Size: {size_str}"
     else:
@@ -2029,6 +2080,7 @@ def append_media_footer(caption: str, file_size_bytes: int = 0) -> str:
     return f"{caption}{footer}"
 
 def prepare_caption_fallback(caption: str, file_size_bytes: int = 0) -> str:
+    caption = strip_whitelabel_references(caption)
     caption = strip_existing_media_footers(caption)
     plain = re.sub(r'<[^>]+>', '', caption).strip()
     return append_media_footer(plain, file_size_bytes)
@@ -2038,6 +2090,7 @@ def sanitize_filename(filename: str) -> str:
     if not filename: return "unnamed_file.dat"
     filename = re.sub(r'[:]', "-", filename)
     filename = re.sub(r'[\\/*?"<>|]', "", filename)
+    filename = LUCIFER_REF_REGEX.sub('', filename)
     
     stem, ext, split_suffix, _ = parse_media_extension_and_split(filename)
 
@@ -2103,7 +2156,10 @@ def _process_media_line(line_html: str) -> tuple[str, bool]:
 # 🚀 SMART CAPTION LOGIC
 def smart_caption(text_html, file_size_bytes=0):
     if not text_html: return ""
-    
+
+    # 0. White-label guard: never carry personal channel references into captions
+    text_html = strip_whitelabel_references(text_html)
+
     # 0. Clean promotional watermarks and hidden promotional links & URLs
     text_html = clean_promotional_watermarks(text_html)
     text_html = clean_promotional_hyperlinks(text_html)
