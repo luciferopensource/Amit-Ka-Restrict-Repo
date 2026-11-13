@@ -6883,7 +6883,7 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                     await client.send_message(
                         chat_id=dest_target, 
                         text=clean_caption,
-                        reply_markup=msg.reply_markup,
+                        reply_markup=None,
                         reply_to_message_id=dest_thread,
                         parse_mode=enums.ParseMode.HTML,
                         disable_web_page_preview=True
@@ -6891,14 +6891,14 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                 except Exception as e_text:
                     if "TOO_LONG" in str(e_text):
                         clean_caption_short = re.sub(r'<[^>]+>', '', clean_caption)[:4000]
-                        try: await client.send_message(chat_id=dest_target, text=clean_caption_short, reply_markup=msg.reply_markup, reply_to_message_id=dest_thread, disable_web_page_preview=True)
+                        try: await client.send_message(chat_id=dest_target, text=clean_caption_short, reply_markup=None, reply_to_message_id=dest_thread, disable_web_page_preview=True)
                         except Exception: pass
                     else:
                         try:
                             await acc.send_message(
                                 chat_id=dest_target, 
                                 text=clean_caption,
-                                reply_markup=None if dest_target == user_id else msg.reply_markup,
+                                reply_markup=None,
                                 reply_to_message_id=dest_thread,
                                 parse_mode=enums.ParseMode.HTML,
                                 disable_web_page_preview=True
@@ -6966,19 +6966,19 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
 
             # 2. Try Bot direct copy_message (Clean server-side copy without forward headers)
             try:
-                await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup)
+                await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                 copied = True
             except FloodWait as e_fw:
                 await asyncio.sleep(e_fw.value + 5)
                 try:
-                    await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup)
+                    await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                     copied = True
                 except Exception:
                     pass
             except Exception:
                 try:
                     fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
-                    await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=msg.reply_markup)
+                    await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=None)
                     copied = True
                 except Exception:
                     pass
@@ -7013,18 +7013,20 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                 try:
                     bridge_msg = await acc.copy_message(chat_id=bot_id, from_chat_id=chatid, message_id=msgid)
                     if bridge_msg:
+                        # The bridge lives in the bot's DM with the userbot account, so the
+                        # bot must read it from that account's id (not the bot-owner user id).
+                        bridge_sender_id = getattr(getattr(acc, "me", None), "id", None) or user_id
                         try:
-                            # Note: from the Bot's perspective, the chat where bridge_msg lives is user_id!
-                            await client.copy_message(chat_id=dest_chat_id, from_chat_id=user_id, message_id=bridge_msg.id, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup)
+                            await client.copy_message(chat_id=dest_chat_id, from_chat_id=bridge_sender_id, message_id=bridge_msg.id, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                             copied = True
                         except FloodWait as fw_b:
                             await asyncio.sleep(fw_b.value + 5)
-                            await client.copy_message(chat_id=dest_chat_id, from_chat_id=user_id, message_id=bridge_msg.id, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup)
+                            await client.copy_message(chat_id=dest_chat_id, from_chat_id=bridge_sender_id, message_id=bridge_msg.id, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                             copied = True
                         except Exception:
                             try:
                                 fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
-                                await client.copy_message(chat_id=dest_chat_id, from_chat_id=user_id, message_id=bridge_msg.id, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=msg.reply_markup)
+                                await client.copy_message(chat_id=dest_chat_id, from_chat_id=bridge_sender_id, message_id=bridge_msg.id, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=None)
                                 copied = True
                             except Exception:
                                 pass
@@ -7104,7 +7106,7 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                                             await sender.send_document(
                                                 dest_chat_id, str(part), caption=clean_caption, 
                                                 parse_mode=enums.ParseMode.HTML, 
-                                                reply_markup=None if is_me else msg.reply_markup, 
+                                                reply_markup=None,
                                                 reply_to_message_id=dest_thread_id, 
                                                 progress=progress, progress_args=[task_uuid, "up"]
                                             )
@@ -7161,12 +7163,12 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
                     dest_chat_id = dest['dest_id']
                     dest_thread_id = dest.get('dest_thread')
                     try:
-                        await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=msg.reply_markup)
+                        await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=clean_caption, parse_mode=enums.ParseMode.HTML, reply_markup=None)
                         download_success = True
                     except Exception:
                         try:
                             fallback_cap = prepare_caption_fallback(clean_caption, media_file_size)
-                            await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=msg.reply_markup)
+                            await client.copy_message(chat_id=dest_chat_id, from_chat_id=chatid, message_id=msgid, reply_to_message_id=dest_thread_id, caption=fallback_cap, reply_markup=None)
                             download_success = True
                         except Exception:
                             pass
@@ -7186,7 +7188,7 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
             dest_thread_id = dest.get('dest_thread')
             is_me = (dest_chat_id == "me" or str(dest_chat_id).lower() == "me")
             uploader = acc if is_me else client
-            rmarkup = None if is_me else msg.reply_markup
+            rmarkup = None
             success_local = False
             async with SERVER_UPLOAD_LIMIT:
                 async with USER_SEMAPHORES[user_id]:

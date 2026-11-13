@@ -177,6 +177,8 @@ Comprehensive code audit conducted by Senior Software Engineer and Code Auditor.
 - **White-label caption guard:** `strip_whitelabel_references()` removes `@LuciferDatabase` / `@RequestLuciferDatabase`, `DB ID` lines and residual promo lines from incoming captions, so even a caption copied from the personal cloud engine arrives fully clean. Media filename lines are protected from the filter.
 - **No duplicate size:** `append_media_footer()` skips the size footer when the source caption already carries one.
 - **Cloud caption flattening:** `flatten_cloud_filename()` reduces a Cloud Engine caption to the cleaned media filename before sanitisation, so the white-label output is the filename plus `💾 Size:` only — no template, dividers or metadata.
+- **4-tier fast-copy:** bot copy → userbot copy → bridge via bot DM → download fallback. The bridge reads from the userbot account id (`acc.me.id`), so multi-account logins work.
+- **Inline keyboards stripped:** source `reply_markup` is never copied, so no promotional buttons reach white-label destinations.
 - **White-label invariant retained:** no `@luciferdatabase` hyperlink or Powered By footer; captions carry `💾 Size:` only.
 - **Verification:** `pytest tests/test_forwarder_engine.py` — 81 passed (2026-11-13).
 
