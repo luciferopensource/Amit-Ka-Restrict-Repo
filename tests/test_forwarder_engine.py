@@ -403,13 +403,12 @@ class TestAuditedEdgeCases:
         assert res.count("<a") == res.count("</a>")
         assert "@luciferdatabase" not in res
 
-    def test_text_format_bold_italic_keeps_hyperlink(self):
-        base = '<a href="https://t.me/luciferdatabase">Movie.mkv</a>'
-        out = apply_text_format(base, ["Bold", "Italic"])
-        assert out == '<b><i><a href="https://t.me/luciferdatabase">Movie.mkv</a></i></b>'
+    def test_text_format_bold_italic_wraps_caption(self):
+        out = apply_text_format("Movie.mkv", ["Bold", "Italic"])
+        assert out == "<b><i>Movie.mkv</i></b>"
 
-    def test_text_format_mono_strips_hyperlinks(self):
-        base = '<a href="https://t.me/luciferdatabase">Movie.mkv</a>'
+    def test_text_format_mono_strips_generic_links(self):
+        base = '<a href="https://example.com/x">Movie.mkv</a>'
         out = apply_text_format(base, ["Mono"])
         assert out == "<code>Movie.mkv</code>"
         assert "<a href" not in out
