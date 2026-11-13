@@ -181,5 +181,7 @@ Comprehensive code audit conducted by Senior Software Engineer and Code Auditor.
 - **Inline keyboards stripped:** source `reply_markup` is never copied, so no promotional buttons reach white-label destinations.
 - **White-label invariant retained:** no `@luciferdatabase` hyperlink or Powered By footer; captions carry `💾 Size:` only.
 - **Text formatting:** Bold/Italic wrap the caption; Mono strips any residual links before `<code>`.
+- **Per-target resume:** progress is stored per destination; the batch resumes from the least-advanced target and only destinations still behind receive each message.
+- **Multi-flow ask:** pending prompts are keyed by `(chat_id, flow_id)`; a new prompt supersedes older ones without leaving them hanging, and timeouts notify the user.
 - **Verification:** `pytest tests/test_forwarder_engine.py` — 83 passed (2026-11-13).
 
