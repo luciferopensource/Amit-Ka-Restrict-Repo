@@ -2154,11 +2154,24 @@ def _process_media_line(line_html: str) -> tuple[str, bool]:
     return final_line, True
 
 # 🚀 SMART CAPTION LOGIC
+def flatten_cloud_filename(text_html: str) -> str:
+    """White-label: reduce a Lucifer Cloud Engine caption to its media filename."""
+    for line in text_html.splitlines():
+        m = re.match(r'^\s*(?:🎬\s*)?File\s*Name\s*:\s*(.+)$', line, flags=re.IGNORECASE)
+        if m:
+            return sanitize_filename(m.group(1).strip())
+    return text_html
+
+
 def smart_caption(text_html, file_size_bytes=0):
     if not text_html: return ""
 
     # 0. White-label guard: never carry personal channel references into captions
     text_html = strip_whitelabel_references(text_html)
+
+    # 0. Cloud Engine captions are flattened to a single clean filename line
+    if re.search(r'(?i)(?:🎬\s*)?File\s*Name\s*:\s*', text_html) and '━━━━━━━━━━━━━━━━━━━' in text_html:
+        text_html = flatten_cloud_filename(text_html)
 
     # 0. Clean promotional watermarks and hidden promotional links & URLs
     text_html = clean_promotional_watermarks(text_html)
