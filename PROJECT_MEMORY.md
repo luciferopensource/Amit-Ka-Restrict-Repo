@@ -188,3 +188,12 @@ Comprehensive code audit conducted by Senior Software Engineer and Code Auditor.
 - **Log redaction:** `/log` sends a redacted copy (`bot.log.redacted`) with DB URIs, bot tokens, credential assignments and long session strings removed.
 - **Verification:** `pytest tests/test_forwarder_engine.py` — 85 passed (2026-11-13).
 
+
+## Quality inference restored (2026-11-14)
+
+- **Branch / commit:** `main` @ `c66bdb8`
+- **Files touched:** `restrict_bot.py`, `tests/test_forwarder_engine.py`
+- **Work done:** the `e8d5ca8` sanitiser rewrite removed the quality-inference step, leaving `QUALITY_REGEX` defined but unused. Restored it in both paths — `sanitize_filename()` and `_process_media_line()` append `" 720p"` when the name carries no quality tag. Names already containing 720p/1080p/2160p/4K/8K are untouched. Added `test_missing_quality_gets_720p_default` and updated four expectations that had encoded the tag-free behaviour. White-label branding is unchanged (no hyperlinks added).
+- **Tests actually run:** `pytest tests -q` → **87 passed** (2026-11-14).
+- **Not verified:** no live forward was executed against Telegram.
+- **Next action:** none; redeploy to pick up the new `restrict_bot.py`.
